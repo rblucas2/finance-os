@@ -2,7 +2,7 @@
    Finanças Pessoais
    ===================================================================== */
 (function () {
-  const { el, $, clear, eur, eur0, num, toast, undo, sheet, field, bar, donut, donutCard, colorsForCount, uid, todayISO, monthKey, prettyMonth, guardClick } = UI;
+  const { el, $, clear, eur, toast, undo, sheet, field, bar, colorsForCount, uid, todayISO, monthKey, prettyMonth, guardClick } = UI;
   const D = Domain;
   const NS = "fin";
 
@@ -14,19 +14,19 @@
     seedFinance();
     ensureTabs();
     applyRecurring();
-    App.onboard("finance", "Finanças", [
-      "⇪ Importa o <b>extrato do banco</b> (CSV, Excel ou PDF) — categorias automáticas que aprendem com as tuas correções.",
+    App.onboard("finance", "Bem-vindo às tuas Finanças", [
+      "⇪ Importa o <b>extrato do banco</b> (CSV, Excel ou PDF) — as categorias aprendem com as tuas correções.",
       "↻ Define <b>movimentos recorrentes</b> (renda, ordenado, subscrições).",
-      "🎯 <b>Orçamentos</b> com alertas e <b>Dinheiro Livre</b> do mês.",
+      "🎯 <b>Orçamentos</b> com alertas e <b>Dinheiro livre</b> do mês.",
       "✎ <b>Separadores à tua medida</b>: reordena, renomeia, esconde ou cria novos (ex: \"Carro\", \"Viagens\").",
-      "🔒 <b>Privada</b>: sincroniza telemóvel ↔ PC com a tua conta e bloqueio com PIN (Definições).",
+      "🔒 <b>Privada</b>: sincroniza telemóvel ↔ PC com a tua conta, e bloqueio com PIN (Definições).",
     ]);
-    $("#settingsBtn").addEventListener("click", App.openSettings);
     $("#tabs").addEventListener("click", (e) => {
       if (e.target.closest(".seg-edit")) return manageTabs();
       const b = e.target.closest("button[data-tab]"); if (!b) return;
       render(b.dataset.tab);
     });
+    $(".brand").addEventListener("click", (e) => { e.preventDefault(); const first = visibleTabs()[0]; if (first) render(first.id); });
     Store.subscribe(NS, () => render(current));
     render(Store.get("sys").lastTab || "resumo");
   }
@@ -37,6 +37,7 @@
   const BUILTIN_TABS = [
     { id: "resumo", type: "resumo", name: "Resumo" },
     { id: "tx", type: "tx", name: "Movimentos" },
+    { id: "cats", type: "cats", name: "Categorias" },
     { id: "budgets", type: "budgets", name: "Orçamentos" },
     { id: "savings", type: "savings", name: "Poupança" },
     { id: "net", type: "net", name: "Património" },
@@ -47,32 +48,47 @@
   };
   const isBuiltin = (t) => BUILTIN_TABS.some((b) => b.id === t.id);
 
+  /** Garante que os separadores base existem. Um separador base novo (ex: "Categorias")
+   *  entra logo a seguir ao separador base que o antecede, sem mexer na ordem do utilizador. */
   function ensureTabs() {
     const have = new Set((Store.get(NS).tabs || []).map((t) => t.id));
     const missing = BUILTIN_TABS.filter((b) => !have.has(b.id));
-    if (missing.length) Store.update(NS, (s) => { s.tabs = s.tabs || []; missing.forEach((b) => s.tabs.push({ ...b })); }, { silent: true, keepTime: true });
+    if (!missing.length) return;
+    Store.update(NS, (s) => {
+      s.tabs = s.tabs || [];
+      missing.forEach((b) => {
+        const bi = BUILTIN_TABS.indexOf(b);
+        let at = s.tabs.length;
+        for (let j = bi - 1; j >= 0; j--) { const k = s.tabs.findIndex((t) => t.id === BUILTIN_TABS[j].id); if (k >= 0) { at = k + 1; break; } }
+        if (bi === 0) at = 0;
+        s.tabs.splice(at, 0, { ...b });
+      });
+    }, { silent: true, keepTime: true });
   }
   const allTabs = () => Store.get(NS).tabs || [];
   const visibleTabs = () => allTabs().filter((t) => !t.hidden);
 
   function drawTabs() {
     const bar = clear($("#tabs"));
-    visibleTabs().forEach((t) => bar.appendChild(el("button", { "data-tab": t.id, class: t.id === current ? "active" : "", text: t.name })));
-    bar.appendChild(el("button", { class: "seg-edit", title: "Organizar separadores", "aria-label": "Organizar separadores", text: "✎" }));
+    visibleTabs().forEach((t) => bar.appendChild(el("button", { "data-tab": t.id, class: t.id === current ? "active" : "", "aria-current": t.id === current ? "page" : null, text: t.name })));
+    bar.appendChild(el("button", { class: "seg-edit", title: "Organizar separadores", "aria-label": "Organizar separadores", html: UI.icon("sliders", 18) }));
     const active = bar.querySelector("button.active");
     if (active && active.scrollIntoView) active.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
-  let current = "resumo";
+  let current = "";
   function render(tabId) {
     const vis = visibleTabs();
     const tab = vis.find((t) => t.id === tabId) || vis[0] || BUILTIN_TABS[0];
-    if (current !== tab.id) Store.update("sys", (s) => { s.lastTab = tab.id; }, { silent: true });
+    const switching = current !== tab.id;
+    if (switching) Store.update("sys", (s) => { s.lastTab = tab.id; }, { silent: true });
     current = tab.id;
     drawTabs();
+    const y = window.scrollY;
     const view = clear($("#view"));
-    const fn = { resumo: renderResumo, tx: renderTx, budgets: renderBudgets, savings: renderSavings, net: renderNet, filter: renderFilterTab, notes: renderNotesTab }[tab.type] || renderResumo;
+    const fn = { resumo: renderResumo, tx: renderTx, cats: renderCats, budgets: renderBudgets, savings: renderSavings, net: renderNet, filter: renderFilterTab, notes: renderNotesTab }[tab.type] || renderResumo;
     fn(view, tab);
+    window.scrollTo(0, switching ? 0 : y);
   }
 
   function manageTabs() {
@@ -192,14 +208,13 @@
     return true;
   }
 
-  let viewYear = String(new Date().getFullYear());
-  function yearNav(onChange) {
-    const shift = (d) => { viewYear = String(+viewYear + d); onChange(); };
-    return el("div", { class: "row", style: "justify-content:center;gap:6px;margin-bottom:6px" }, [
-      el("button", { class: "btn btn-ghost btn-sm", text: "‹", onclick: () => shift(-1) }),
-      el("strong", { text: "📅 " + viewYear, style: "min-width:150px;text-align:center" }),
-      el("button", { class: "btn btn-ghost btn-sm", text: "›", onclick: () => shift(1) }),
-    ]);
+  function describeFilter(tab) {
+    const parts = [];
+    parts.push(tab.categories && tab.categories.length ? tab.categories.join(", ") : "Todas as categorias");
+    if (tab.sources && tab.sources.length) parts.push(tab.sources.join(", "));
+    if (tab.query) parts.push(`descrição contém "${tab.query}"`);
+    if (tab.kind === "expense") parts.push("só despesas"); else if (tab.kind === "income") parts.push("só receitas");
+    return parts.join(" · ");
   }
 
   function renderFilterTab(view, tab) {
@@ -207,50 +222,48 @@
     const period = tab.period || "month";
     const inPeriod = (t) => period === "all" ? true : period === "year" ? (t.date || "").slice(0, 4) === viewYear : (t.date || "").slice(0, 7) === viewMonth;
     const tx = (fin.transactions || []).filter((t) => matchesTab(t, tab) && inPeriod(t));
-    const periodLabel = period === "all" ? "desde sempre" : period === "year" ? viewYear : UI.prettyMonth(viewMonth);
+    const periodLabel = period === "all" ? "Desde sempre" : period === "year" ? viewYear : cap(prettyMonth(viewMonth));
     let income = 0, expense = 0; const byCat = {};
     tx.forEach((t) => { if (t.type === "income") income += t.amount; else { expense += t.amount; byCat[t.category || "Outros"] = (byCat[t.category || "Outros"] || 0) + t.amount; } });
-    $("#subtitle").textContent = tx.length + " movimento" + (tx.length === 1 ? "" : "s") + " · " + periodLabel;
+
+    const actions = [];
+    if (period === "month") actions.push(monthPill(() => render(tab.id)));
+    if (period === "year") actions.push(yearPill(() => render(tab.id)));
+    actions.push(btnI("btn-lg", "sliders", "Editar", () => editTab(tab)));
+    view.appendChild(pageHead({ eyebrow: "Separador personalizado", icon: "filter", title: tab.name, sub: describeFilter(tab), actions }));
 
     const kind = tab.kind || "all";
-    const heroValue = kind === "income" ? income : kind === "expense" ? expense : income - expense;
-    const heroLabel = kind === "income" ? "Recebido" : kind === "expense" ? "Gasto" : "Saldo";
-    const hero = el("div", { class: "hero" }, [
-      el("div", { class: "label", text: tab.name + " · " + heroLabel }),
-      el("div", { class: "value", text: eur(heroValue) }),
-      el("div", { class: "foot", text: kind === "all" ? `${periodLabel} · receitas ${eur0(income)} − despesas ${eur0(expense)}` : `${periodLabel} · ${tx.length} movimento${tx.length === 1 ? "" : "s"}` }),
+    const n = tx.length;
+    const countSub = `${n} movimento${n === 1 ? "" : "s"} · ${periodLabel.toLowerCase()}`;
+    const kpis = kind === "all"
+      ? [kpi({ label: "Saldo", value: eur(income - expense), sub: countSub, icon: "wallet", variant: income - expense < 0 ? "bad" : "accent" }),
+         kpi({ label: "Receitas", value: eur(income), sub: periodLabel, icon: "down" }),
+         kpi({ label: "Despesas", value: eur(expense), sub: periodLabel, icon: "up", variant: "bad" })]
+      : [kpi({ label: kind === "income" ? "Recebido" : "Gasto", value: eur(kind === "income" ? income : expense), sub: countSub, icon: kind === "income" ? "down" : "up", variant: "accent" }),
+         kpi({ label: "Movimentos", value: String(n), sub: periodLabel, icon: "repeat" }),
+         kpi({ label: "Média por movimento", value: eur(n ? (kind === "income" ? income : expense) / n : 0), sub: periodLabel, icon: "chart" })];
+
+    const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+    const colors = colorsForCount(cats.length);
+    const catPanel = cats.length > 1 ? panel({ title: "Por categoria", sub: periodLabel }, [
+      dotRows(cats.map(([label, value], i) => ({ label, value, color: colors[i] })), expense,
+        (p) => showTxSheet(p.label + " · " + tab.name, tx.filter((t) => t.type === "expense" && (t.category || "Outros") === p.label))),
+    ]) : null;
+
+    const sorted = [...tx].sort((a, b) => (b.date || "").localeCompare(a.date) || (b._c || 0) - (a._c || 0));
+    const listPanel = panel({ title: "Movimentos", sub: countSub }, [
+      sorted.length ? txRows(sorted.slice(0, 400)) : el("div", { class: "empty", text: "Nenhum movimento corresponde a este filtro neste período." }),
     ]);
 
-    const parts = [];
-    const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
-    let donutC = null;
-    if (cats.length > 1) {
-      const colors = colorsForCount(cats.length);
-      donutC = donutCard({
-        title: "Despesas por categoria", parts: cats.map(([label, value], i) => ({ label, value, color: colors[i] })),
-        totalValue: eur0(expense), totalLabel: "gasto",
-        onOpen: (p) => showTxSheet(p.label + " · " + tab.name, tx.filter((t) => t.type === "expense" && (t.category || "Outros") === p.label)),
-      });
-    }
-
-    const list = el("div", { class: "card list" });
-    const sorted = [...tx].sort((a, b) => (b.date || "").localeCompare(a.date) || (b._c || 0) - (a._c || 0));
-    if (!sorted.length) list.appendChild(el("div", { class: "empty", text: "Nenhum movimento corresponde a este filtro neste período." }));
-    sorted.slice(0, 400).forEach((t) => list.appendChild(txRow(t, true)));
-
-    const editBtn = el("button", { class: "btn btn-ghost btn-block btn-sm", html: "⚙ Editar filtro do separador", onclick: () => editTab(tab) });
-    if (period === "month") parts.push(monthNav(() => render(tab.id)));
-    if (period === "year") parts.push(yearNav(() => render(tab.id)));
-    parts.push(el("div", { class: "stack" }, [hero, donutC, el("strong", { text: "Movimentos" }), list, editBtn].filter(Boolean)));
-    parts.forEach((p) => view.appendChild(p));
+    view.appendChild(el("div", { class: "stack" }, [el("div", { class: "kpis" }, kpis), catPanel, listPanel].filter(Boolean)));
   }
 
   /* -------- Separador personalizado: notas -------- */
   function renderNotesTab(view, tab) {
-    $("#subtitle").textContent = "Notas";
-    const area = el("textarea", { class: "notes-area", placeholder: "Escreve aqui… (guarda automaticamente)" });
+    view.appendChild(pageHead({ eyebrow: "Notas", icon: "notes", title: tab.name, sub: "Guarda sozinho e sincroniza entre dispositivos.", actions: [btnI("btn-lg", "sliders", "Editar", () => editTab(tab))] }));
+    const area = el("textarea", { class: "notes-area", placeholder: "Escreve aqui…", "aria-label": tab.name });
     area.value = tab.body || "";
-    const state = el("div", { class: "tiny muted", style: "text-align:right;min-height:16px" });
+    const state = el("div", { class: "tiny muted", style: "text-align:right;min-height:18px;margin-top:8px" });
     let t = null;
     area.addEventListener("input", () => {
       state.textContent = "…";
@@ -261,29 +274,98 @@
         state.textContent = "Guardado ✓";
       }, 600);
     });
-    view.appendChild(el("div", { class: "stack" }, [
-      el("div", { class: "card" }, [area, state]),
-      el("button", { class: "btn btn-ghost btn-block btn-sm", html: "⚙ Renomear / apagar", onclick: () => editTab(tab) }),
-    ]));
+    view.appendChild(panel({}, [area, state]));
   }
 
-  function monthNav(onChange) {
-    const prev = el("button", { class: "btn btn-ghost btn-sm", text: "‹", onclick: () => shift(-1) });
-    const next = el("button", { class: "btn btn-ghost btn-sm", text: "›", onclick: () => shift(1) });
-    // input nativo type="month" escondido — o label funciona como botão que abre o seletor,
-    // para se poder saltar direto para um mês antigo em vez de clicar em ‹ repetidamente.
-    const picker = el("input", { type: "month", class: "hide", value: viewMonth });
-    picker.addEventListener("change", () => { if (picker.value) { viewMonth = picker.value; onChange(); } });
-    const label = el("strong", {
-      text: "📅 " + prettyMonth(viewMonth), style: "min-width:150px;text-align:center;cursor:pointer",
-      onclick: () => { if (picker.showPicker) picker.showPicker(); else picker.click(); },
-    });
-    function shift(d) {
-      const [y, m] = viewMonth.split("-").map(Number);
-      const dt = new Date(y, m - 1 + d, 1); viewMonth = monthKey(dt); onChange();
-    }
-    return el("div", { class: "row", style: "justify-content:center;gap:6px;margin-bottom:6px" }, [prev, label, next, picker]);
+  /* ----------------------------- COMPONENTES ----------------------------- */
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const ico = (name, size = 20) => el("span", { class: "ico", style: "display:inline-flex", html: UI.icon(name, size) });
+  const signed = (t) => (t.type === "income" ? "+" : t.type === "transfer" ? "" : "-") + eur(t.amount);
+  function ddmm(iso) {
+    if (!iso) return "";
+    const same = iso.slice(0, 4) === String(new Date().getFullYear());
+    return iso.slice(8, 10) + "/" + iso.slice(5, 7) + (same ? "" : "/" + iso.slice(2, 4));
   }
+  const btnI = (cls, iconName, label, onclick) => el("button", { class: "btn " + cls, "aria-label": label, onclick }, [ico(iconName, 18), el("span", { text: label })]);
+
+  function pageHead({ eyebrow, icon, title, sub, actions }) {
+    const eb = eyebrow ? el("div", { class: "eyebrow" }, [icon ? ico(icon, 16) : null, el("span", { text: eyebrow })]) : null;
+    return el("div", { class: "page-head" }, [
+      el("div", { class: "ph-text" }, [eb, el("h1", { class: "page-title", text: title }), sub ? el("p", { class: "page-sub", text: sub }) : null]),
+      actions && actions.length ? el("div", { class: "ph-actions" }, actions) : null,
+    ]);
+  }
+
+  function panel({ title, sub, icon, action, cls }, children) {
+    const head = title ? el("div", { class: "panel-head" }, [
+      el("div", {}, [el("h2", { class: "panel-title", text: title }), sub ? el("div", { class: "panel-sub", text: sub }) : null]),
+      action || (icon ? el("span", { class: "panel-ico", html: UI.icon(icon, 26) }) : null),
+    ]) : null;
+    return el("section", { class: "panel" + (cls ? " " + cls : "") }, [head, ...children]);
+  }
+  const linkBtn = (text, onclick) => el("button", { class: "link-btn", onclick }, [el("span", { text }), ico("right", 18)]);
+
+  function kpi({ label, value, sub, icon, variant, onClick }) {
+    return el(onClick ? "button" : "div", { class: "kpi-card" + (variant ? " is-" + variant : ""), type: onClick ? "button" : null, onclick: onClick || null }, [
+      el("div", { class: "k-label", text: label }),
+      el("span", { class: "k-ico", html: UI.icon(icon, 20) }),
+      el("div", { class: "k-value", text: value }),
+      sub ? el("div", { class: "k-sub", text: sub }) : null,
+    ]);
+  }
+
+  function monthPill(onChange) {
+    const picker = el("input", { type: "month", class: "hide", value: viewMonth, "aria-label": "Escolher mês" });
+    picker.addEventListener("change", () => { if (picker.value) { viewMonth = picker.value; onChange(); } });
+    const shift = (d) => { const [y, m] = viewMonth.split("-").map(Number); viewMonth = monthKey(new Date(y, m - 1 + d, 1)); onChange(); };
+    return el("div", { class: "month-pill" }, [
+      el("button", { class: "mp-btn", "aria-label": "Mês anterior", html: UI.icon("left", 20), onclick: () => shift(-1) }),
+      el("div", { class: "mp-label", title: "Escolher mês", onclick: () => { try { picker.showPicker(); } catch (e) { picker.click(); } } }, [ico("calendar", 18), el("span", { text: cap(prettyMonth(viewMonth)) })]),
+      picker,
+      el("button", { class: "mp-btn", "aria-label": "Mês seguinte", html: UI.icon("right", 20), onclick: () => shift(1) }),
+    ]);
+  }
+
+  let viewYear = String(new Date().getFullYear());
+  function yearPill(onChange) {
+    const shift = (d) => { viewYear = String(+viewYear + d); onChange(); };
+    return el("div", { class: "month-pill" }, [
+      el("button", { class: "mp-btn", "aria-label": "Ano anterior", html: UI.icon("left", 20), onclick: () => shift(-1) }),
+      el("div", { class: "mp-label" }, [ico("calendar", 18), el("span", { text: viewYear })]),
+      el("button", { class: "mp-btn", "aria-label": "Ano seguinte", html: UI.icon("right", 20), onclick: () => shift(1) }),
+    ]);
+  }
+
+  /** Linhas "● Categoria ...... 12% 120,00 €" — parts: [{label, value, color}]. */
+  function dotRows(parts, total, onClick) {
+    return el("div", { class: "dot-rows" }, parts.map((p) => el("div", { class: "dot-row", onclick: onClick ? () => onClick(p) : null }, [
+      el("span", { class: "dr-dot", style: "background:" + p.color }),
+      el("span", { class: "dr-name", text: p.label }),
+      total ? el("span", { class: "dr-pct", text: Math.round(p.value / total * 100) + "%" }) : null,
+      el("span", { class: "money", text: eur(p.value) }),
+    ])));
+  }
+
+  /** Barras mensais arredondadas (verde = positivo, terracota = negativo). */
+  function evoChart(series, onPick) {
+    const max = Math.max(1, ...series.map((m) => Math.abs(m.value)));
+    return el("div", { class: "evo" }, series.map((m) => el("div", { class: "ev-col" + (m.cur ? " cur" : ""), title: `${m.title}: ${eur(m.value)}`, onclick: onPick ? () => onPick(m) : null }, [
+      el("div", { class: "ev-bar" + (m.value < 0 ? " neg" : ""), style: `height:max(8px, calc((100% - 34px) * ${(Math.abs(m.value) / max).toFixed(4)}))` }),
+      el("div", { class: "ev-lbl", text: m.label }),
+    ])));
+  }
+
+  /** Linha de movimento com bolha (listas do Resumo, sheets, separadores filtrados). */
+  function txRow(t, editable = true) {
+    const inc = t.type === "income", tr = t.type === "transfer";
+    const sub = [tr ? `${t.account || "?"} → ${t.toAccount || "?"}` : (t.category || "Outros"), ddmm(t.date)].join(" · ");
+    return el("div", { class: "tx-line", style: editable ? "" : "cursor:default", onclick: editable ? () => editTx(t) : null }, [
+      el("span", { class: "bubble" + (inc ? " in" : ""), html: UI.icon(tr ? "repeat" : inc ? "down" : "up", 20) }),
+      el("div", { class: "tl-main" }, [el("div", { class: "tl-title", text: t.desc || "(sem descrição)" }), el("div", { class: "tl-sub", text: sub })]),
+      el("div", { class: "money" + (inc ? " pos" : ""), text: signed(t) }),
+    ]);
+  }
+  const txRows = (list) => el("div", { class: "tx-rows" }, list.map((t) => txRow(t, true)));
 
   /* ----------------------------- RESUMO ----------------------------- */
   function monthlySeries(fin, endMk, n = 6) {
@@ -292,187 +374,107 @@
     for (let i = n - 1; i >= 0; i--) {
       const d = new Date(ey, em - 1 - i, 1); const mk = monthKey(d);
       const s = D.financeSummary(fin, mk);
-      out.push({ mk, label: UI.MONTHS[d.getMonth()].slice(0, 3), income: s.income, expense: s.expense, net: s.balance });
+      out.push({ mk, label: UI.MONTHS[d.getMonth()].slice(0, 3), title: cap(prettyMonth(mk)), value: s.balance, cur: mk === endMk });
     }
     return out;
-  }
-  function dailyCumulative(fin, mk) {
-    const tx = D.txInMonth(fin.transactions, mk).filter((t) => t.type === "expense");
-    const days = new Date(+mk.slice(0, 4), +mk.slice(5) , 0).getDate();
-    const perDay = new Array(days).fill(0);
-    tx.forEach((t) => { const d = parseInt((t.date || "").slice(8, 10), 10); if (d >= 1 && d <= days) perDay[d - 1] += t.amount; });
-    let acc = 0; return perDay.map((v) => (acc += v));
   }
 
   function renderResumo(view) {
     const fin = Store.get(NS);
     const s = D.financeSummary(fin, viewMonth, essentialSet());
-    $("#subtitle").textContent = "Visão geral";
+    const monthTx = D.txInMonth(fin.transactions, viewMonth);
+    const incomeTx = monthTx.filter((t) => t.type === "income"), expenseTx = monthTx.filter((t) => t.type === "expense");
+    const pm = prettyMonth(viewMonth);
 
-    // HERO — Dinheiro livre
-    const hero = el("div", { class: "hero" }, [
-      el("div", { class: "label", text: "Dinheiro livre" }),
-      el("div", { class: "value", text: eur(s.free) }),
-      el("div", { class: "foot", text: `${UI.prettyMonth(viewMonth)} · rend. ${eur0(s.income)} − gastos ${eur0(s.expense)} − compromissos ${eur0(s.committed)}` }),
+    view.appendChild(pageHead({ eyebrow: "O teu dinheiro, sem ruído", icon: "sparkles", title: "Olá, este é o teu espaço.",
+      sub: `Uma vista honesta sobre onde estás em ${pm}.`, actions: [monthPill(() => render(current))] }));
+
+    const pct = s.income ? Math.round(s.expense / s.income * 100) : null;
+    const kpis = el("div", { class: "kpis" }, [
+      kpi({ label: "Dinheiro livre", value: eur(s.free), sub: "rendimentos − gastos − compromissos", icon: "wallet", variant: "accent", onClick: () => freeSheet(s) }),
+      kpi({ label: "Rendimentos", value: eur(s.income), sub: `${incomeTx.length} ${incomeTx.length === 1 ? "entrada" : "entradas"} este mês`, icon: "down", onClick: () => showTxSheet("Rendimentos · " + pm, incomeTx) }),
+      kpi({ label: "Despesas", value: eur(s.expense), sub: pct != null ? `${pct}% dos rendimentos` : `${expenseTx.length} movimentos`, icon: "up", variant: "bad", onClick: () => showTxSheet("Despesas · " + pm, expenseTx) }),
     ]);
 
-    const kpis = el("div", { class: "grid-2" }, [
-      kpiCard("Rendimentos", eur(s.income), "var(--good)", "↑", () => showTxSheet("Rendimentos · " + UI.prettyMonth(viewMonth), D.txInMonth(fin.transactions, viewMonth).filter((t) => t.type === "income"))),
-      kpiCard("Despesas", eur(s.expense), "var(--bad)", "↓", () => showTxSheet("Despesas · " + UI.prettyMonth(viewMonth), D.txInMonth(fin.transactions, viewMonth).filter((t) => t.type === "expense"))),
-    ]);
-
-    const balCard = sourceBalancesCard();
-
-    // Evolução mensal (receitas vs despesas) — 6 meses
-    const series = monthlySeries(fin, viewMonth, 6);
-    const maxV = Math.max(1, ...series.map((m) => Math.max(m.income, m.expense)));
-    const bars = el("div", { class: "row", style: "align-items:flex-end;gap:10px;height:120px;margin-top:14px" });
-    series.forEach((m) => {
-      const cur = m.mk === viewMonth;
-      const col = (v, c) => el("div", { style: `flex:1;max-width:14px;height:${Math.max(3, (v / maxV) * 92)}px;border-radius:5px 5px 3px 3px;background:${c};opacity:${cur ? 1 : .55}` });
-      bars.appendChild(el("div", { style: "flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;height:100%;justify-content:flex-end" }, [
-        el("div", { class: "row", style: "gap:3px;align-items:flex-end;height:100%;width:100%;justify-content:center" }, [col(m.income, "var(--good)"), col(m.expense, "var(--bad)")]),
-        el("div", { class: "tiny muted", style: "font-size:.62rem;" + (cur ? "font-weight:800;color:var(--accent)" : ""), text: m.label }),
-      ]));
-    });
-    const trendCard = el("div", { class: "card" }, [
-      el("div", { class: "row between" }, [el("strong", { text: "Evolução (6 meses)" }),
-        el("div", { class: "row", style: "gap:12px" }, [el("span", { class: "tiny", html: `<span class="dot" style="background:var(--good)"></span> Receitas` }), el("span", { class: "tiny", html: `<span class="dot" style="background:var(--bad)"></span> Despesas` })])]),
-      bars,
-    ]);
-
-    // Gasto acumulado no mês (linha)
-    let cumCard = null;
-    const cum = dailyCumulative(fin, viewMonth);
-    if (cum[cum.length - 1] > 0) {
-      cumCard = el("div", { class: "card" }, [
-        el("div", { class: "row between" }, [el("strong", { text: "Gasto acumulado no mês" }), el("span", { class: "num", style: "font-weight:800", text: eur0(cum[cum.length - 1]) })]),
-        UI.lineChart(cum, { height: 74, color: "var(--accent)", labels: ["dia 1", "dia " + cum.length] }),
-      ]);
-    }
-
-    // Donut por categoria — toca numa fatia ou na legenda para ver o valor e a
-    // percentagem exatos dessa categoria em vez do total.
     const cats = Object.entries(s.byCat).sort((a, b) => b[1] - a[1]);
-    const catColors = colorsForCount(cats.length);
-    const chartCard = donutCard({
-      title: "Despesas por categoria",
-      parts: cats.map(([name, value], i) => ({ label: name, value, color: catColors[i] })),
-      totalValue: eur0(s.expense), totalLabel: "gasto",
-      empty: '<span class="ico">🥧</span>Sem despesas neste mês. Adiciona movimentos, importa um CSV, ou muda de mês com ‹ ›.',
-      onOpen: (p) => showTxSheet(p.label + " · " + UI.prettyMonth(viewMonth), D.txInMonth(fin.transactions, viewMonth).filter((t) => t.type === "expense" && (t.category || "Outros") === p.label)),
-    });
+    const colors = colorsForCount(cats.length);
+    const catPanel = panel({ title: "Despesas por categoria", sub: "Este mês", action: linkBtn("Ver movimentos", () => render("tx")) }, [
+      cats.length
+        ? dotRows(cats.map(([label, value], i) => ({ label, value, color: colors[i] })), s.expense,
+          (p) => showTxSheet(p.label + " · " + pm, expenseTx.filter((t) => (t.category || "Outros") === p.label)))
+        : el("div", { class: "empty", text: "Sem despesas neste mês." }),
+    ]);
 
-    // Top despesas
-    const tx = D.txInMonth(fin.transactions, viewMonth).filter((t) => t.type === "expense").sort((a, b) => b.amount - a.amount).slice(0, 5);
-    const topCard = el("div", { class: "card" }, [el("strong", { text: "Maiores gastos" })]);
-    if (tx.length) { const list = el("div", { class: "list" }); tx.forEach((t) => list.appendChild(txRow(t, false))); topCard.appendChild(list); }
-    else topCard.appendChild(el("div", { class: "empty tiny", text: "—" }));
-
-    // Essenciais vs estilo de vida
     let ess = 0, life = 0;
     Object.entries(s.byCat).forEach(([c, v]) => { if (catGroup(c) === "essential") ess += v; else life += v; });
-    const tot = ess + life || 1;
-    const splitCard = el("div", { class: "card" }, [
-      el("strong", { text: "Essenciais vs. Estilo de vida" }),
-      el("div", { class: "row between", style: "margin-top:10px" }, [el("span", { class: "tiny", text: "Essenciais" }), el("span", { class: "tiny num", text: eur0(ess) + " · " + Math.round(ess / tot * 100) + "%" })]),
-      barColored(ess / tot * 100, "var(--accent)"),
-      el("div", { class: "row between", style: "margin-top:10px" }, [el("span", { class: "tiny", text: "Estilo de vida" }), el("span", { class: "tiny num", text: eur0(life) + " · " + Math.round(life / tot * 100) + "%" })]),
-      barColored(life / tot * 100, "var(--warn)"),
+    const tot = ess + life;
+    const legendItem = (label, v, color) => el("span", {}, [el("i", { class: "dot", style: "background:" + color }), label, el("b", { text: eur(v) })]);
+    const splitPanel = panel({ title: "Essenciais vs estilo de vida", sub: "A forma como o mês se divide" }, [
+      el("div", { class: "split-bar" }, tot ? [
+        el("i", { style: `width:${(ess / tot * 100).toFixed(2)}%;background:var(--accent)` }),
+        el("i", { style: `width:${(life / tot * 100).toFixed(2)}%;background:var(--bad)` }),
+      ] : []),
+      el("div", { class: "split-legend" }, [legendItem("Essenciais", ess, "var(--accent)"), legendItem("Estilo de vida", life, "var(--bad)")]),
     ]);
 
-    view.appendChild(monthNav(() => render(current)));
-    view.appendChild(el("div", { class: "stack" }, [hero, kpis, balCard, chartCard, splitCard, trendCard, cumCard, topCard].filter(Boolean)));
+    const evoPanel = panel({ title: "Evolução mensal", sub: "Saldo que sobra em cada mês", icon: "chart" }, [
+      evoChart(monthlySeries(fin, viewMonth, 6), (m) => { viewMonth = m.mk; render(current); }),
+    ]);
+
+    const top = [...expenseTx].sort((a, b) => b.amount - a.amount).slice(0, 5);
+    const topPanel = panel({ title: "Maiores gastos", sub: "Os movimentos que mais pesaram",
+      action: el("button", { class: "btn btn-soft", onclick: () => render("tx") }, [el("span", { text: "Ver todos" }), ico("right", 18)]) }, [
+      top.length ? txRows(top) : el("div", { class: "empty", text: "Sem despesas neste mês." }),
+    ]);
+
+    view.appendChild(el("div", { class: "stack" }, [kpis, sourcePanel(), catPanel, splitPanel, evoPanel, topPanel]));
   }
 
-  function kpiCard(k, v, color, arrow, onclick) { return el("div", { class: "card kpi pad-sm", style: onclick ? "cursor:pointer" : "", onclick: onclick || null }, [el("div", { class: "k", text: k }), el("div", { class: "v num", style: "color:" + color, text: (arrow ? arrow + " " : "") + v })]); }
-  function barColored(pct, color) { const b = bar(Math.min(100, pct)); b.firstChild.style.background = color; b.style.marginTop = "6px"; return b; }
+  function freeSheet(s) {
+    const line = (k, v, strong) => el("div", { class: "item" }, [el("div", { class: "grow" }, [el("div", { class: "t", text: k })]), el("div", { class: "amt", style: strong ? "color:var(--accent-ink)" : "", text: v })]);
+    sheet("Dinheiro livre", [
+      el("p", { class: "muted", style: "margin:0", text: "O que podes gastar este mês sem comprometer as contas." }),
+      el("div", { class: "list" }, [
+        line("Rendimentos", "+" + eur(s.income)), line("Gastos", "-" + eur(s.expense)),
+        line("Compromissos", "-" + eur(s.committed)), line("Dinheiro livre", eur(s.free), true),
+      ]),
+      el("p", { class: "tiny muted", text: "Compromissos = o que ainda falta gastar dos orçamentos das categorias essenciais (renda, contas, supermercado…). Define-os em Orçamentos." }),
+    ]);
+  }
 
-  /** Abre uma sheet com a lista de transações dadas (mais recente primeiro) — usado
-   *  pelos widgets Rendimentos/Despesas e pelos gráficos circulares para mostrar os
-   *  movimentos concretos por trás de um valor/categoria. */
+  /** Sheet com uma lista de movimentos (mais recente primeiro). */
   function showTxSheet(title, txs) {
     const sorted = [...txs].sort((a, b) => (b.date || "").localeCompare(a.date) || (b._c || 0) - (a._c || 0));
-    const total = sorted.reduce((a, t) => a + t.amount, 0);
-    const list = el("div", { class: "list" });
-    if (!sorted.length) list.appendChild(el("div", { class: "empty tiny", text: "Sem movimentos." }));
-    else sorted.forEach((t) => list.appendChild(txRow(t, true)));
+    const total = sorted.reduce((a, t) => a + (t.type === "income" ? t.amount : t.type === "expense" ? -t.amount : 0), 0);
     sheet(title, [
-      el("p", { class: "tiny muted", text: sorted.length + " movimento" + (sorted.length === 1 ? "" : "s") + " · total " + eur(total) }),
-      list,
+      el("p", { class: "tiny muted", style: "margin:0", text: sorted.length + " movimento" + (sorted.length === 1 ? "" : "s") + " · total " + eur(Math.abs(total)) }),
+      sorted.length ? txRows(sorted) : el("div", { class: "empty", text: "Sem movimentos." }),
     ]);
   }
 
-  /** Card "Saldo por método de pagamento" — quanto dinheiro há em cada fonte (dinheiro, cartões, contas…). */
-  function sourceBalancesCard() {
+  /** Painel "Saldo por fonte" — quanto há em cada conta/cartão/dinheiro. */
+  function sourcePanel() {
     const fin = Store.get(NS);
     const { list, total } = D.sourceBalances(fin);
-    const card = el("div", { class: "card" }, [
-      el("div", { class: "row between" }, [el("strong", { text: "Saldo por método de pagamento" }), el("span", { class: "tiny muted", text: "total " + eur0(total) })]),
+    const max = Math.max(1, ...list.map((x) => Math.abs(x.balance)));
+    const rows = el("div", { class: "src-rows" });
+    if (!list.length) rows.appendChild(el("div", { class: "empty", text: "Sem fontes de pagamento ainda." }));
+    [...list].sort((a, b) => b.balance - a.balance).forEach((src) => {
+      const neg = src.balance < 0;
+      rows.appendChild(el("div", { class: "src-row", onclick: () => { const so = (fin.sources || []).find((x) => x.name === src.name); editSource(so || null, { presetName: src.name }); } }, [
+        el("div", { class: "src-top" }, [el("span", { text: src.name }), el("span", { class: "money" + (neg ? " neg-strong" : ""), text: eur(src.balance) })]),
+        bar(Math.abs(src.balance) / max * 100, neg ? "bad" : ""),
+      ]));
+    });
+    return panel({ title: "Saldo por fonte", sub: "Onde o teu dinheiro está agora · total " + eur(total), icon: "bank" }, [
+      rows, el("div", { style: "margin-top:20px" }, [btnI("btn-ghost btn-sm", "card", "Gerir fontes", manageSources)]),
     ]);
-    if (!list.length) { card.appendChild(el("div", { class: "empty tiny", text: "Sem fontes de pagamento ainda." })); return card; }
-    const rows = el("div", { class: "list", style: "margin-top:6px" });
-    list.sort((a, b) => b.balance - a.balance).forEach((src) => rows.appendChild(el("div", { class: "item", style: "cursor:pointer", onclick: () => { const s = (fin.sources || []).find((x) => x.name === src.name); editSource(s || null, { presetName: src.name }); } }, [
-      el("div", { class: "grow t", text: src.name }),
-      el("div", { class: "amt", style: "color:" + (src.balance < 0 ? "var(--bad)" : "var(--text)"), text: eur(src.balance) }),
-    ])));
-    card.appendChild(rows);
-    card.appendChild(el("button", { class: "btn btn-ghost btn-block btn-sm", style: "margin-top:6px", html: "💳 Gerir fontes", onclick: manageSources }));
-    return card;
   }
 
-  /* ----------------------------- TRANSAÇÕES ----------------------------- */
+  /* ----------------------------- MOVIMENTOS ----------------------------- */
+  let txQuery = "";
+  let txLimit = 200;
   function renderTx(view) {
-    const fin = Store.get(NS);
-    $("#subtitle").textContent = fin.transactions.length + " transações";
-    const search = field("Pesquisar", { placeholder: "Descrição ou categoria…" });
-    const list = el("div", { class: "card list" });
-    const selBar = el("div", { class: "row", style: "gap:10px;align-items:center" });
-
-    let selectMode = false;
-    let selected = new Set();
-    let shown = []; // ids atualmente visíveis (após pesquisa) — para o "selecionar tudo"
-
-    function drawBar() {
-      clear(selBar);
-      if (!selectMode) {
-        selBar.appendChild(el("button", { class: "btn btn-ghost btn-block btn-sm", html: "☑ Selecionar", onclick: () => { selectMode = true; selected = new Set(); draw(); } }));
-        return;
-      }
-      const allSelected = shown.length > 0 && shown.every((id) => selected.has(id));
-      selBar.appendChild(el("button", { class: "btn btn-ghost btn-sm", text: allSelected ? "Limpar" : "Todos", onclick: () => { selected = allSelected ? new Set() : new Set(shown); draw(); } }));
-      selBar.appendChild(el("div", { class: "grow s", style: "text-align:center;color:var(--text-soft)", text: selected.size ? selected.size + " selecionada" + (selected.size > 1 ? "s" : "") : "Toca nas transações para selecionar" }));
-      selBar.appendChild(el("button", { class: "btn btn-block", style: "flex:0 0 auto;color:" + (selected.size ? "var(--bad)" : "var(--text-mute)"), text: "🗑 Apagar", disabled: !selected.size, onclick: async () => {
-        if (!selected.size) return;
-        const n = selected.size;
-        if (!(await UI.confirm(`Apagar ${n} transaç${n > 1 ? "ões" : "ão"}? Podes anular a seguir.`, { ok: "Apagar", danger: true }))) return;
-        const ids = selected;
-        const snap = Store.get(NS).transactions.filter((t) => ids.has(t.id)).map((t) => JSON.parse(JSON.stringify(t)));
-        // Store.update dispara Store.subscribe(NS, ...) -> render(current), que já reconstrói
-        // esta vista do zero (selectMode volta a false) — não é preciso repor o estado aqui.
-        Store.update(NS, (s) => { s.transactions = s.transactions.filter((t) => !ids.has(t.id)); });
-        undo(`${n} transaç${n > 1 ? "ões apagadas" : "ão apagada"}`, () => Store.update(NS, (s) => { s.transactions.push(...snap); }));
-      }}));
-      selBar.appendChild(el("button", { class: "btn btn-ghost btn-sm", text: "Cancelar", onclick: () => { selectMode = false; selected = new Set(); draw(); } }));
-    }
-
-    function draw() {
-      const q = search.input.value.toLowerCase().trim();
-      clear(list);
-      const tx = [...Store.get(NS).transactions]
-        .filter((t) => !q || (t.desc || "").toLowerCase().includes(q) || (t.category || "").toLowerCase().includes(q))
-        .sort((a, b) => (b.date || "").localeCompare(a.date) || (b._c || 0) - (a._c || 0));
-      shown = tx.slice(0, 400).map((t) => t.id);
-      drawBar();
-      if (!tx.length) { list.appendChild(el("div", { class: "empty", text: "Sem transações. Importa um CSV ou adiciona manualmente." })); return; }
-      tx.slice(0, 400).forEach((t) => list.appendChild(txRow(t, true, {
-        selectMode,
-        checked: selected.has(t.id),
-        onToggle: () => { if (selected.has(t.id)) selected.delete(t.id); else selected.add(t.id); drawBar(); const row = document.getElementById("tx-" + t.id); if (row) row.classList.toggle("on", selected.has(t.id)); },
-      })));
-    }
-    search.input.addEventListener("input", draw); draw();
-
     const importInput = el("input", { type: "file", accept: ".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.pdf,application/pdf", class: "hide" });
     importInput.addEventListener("change", () => {
       const f = importInput.files[0]; importInput.value = "";
@@ -483,35 +485,239 @@
       else f.text().then((txt) => importCsv(txt));
     });
 
+    view.appendChild(pageHead({ eyebrow: "Registo completo", title: "Movimentos", sub: "Tudo o que entra, sai e muda de lugar.", actions: [
+      btnI("btn-lg", "upload", "Importar", () => importInput.click()),
+      btnI("btn-primary btn-lg", "plus", "Novo movimento", () => editTx(null)),
+      importInput,
+    ] }));
+
+    const search = el("input", { type: "search", placeholder: "Procurar por descrição, categoria ou fonte…", value: txQuery, "aria-label": "Procurar movimentos" });
+    const moreBtn = el("button", { class: "btn btn-soft btn-lg" }, [ico("repeat", 18), el("span", { text: "Recorrentes" }), ico("chevron", 16)]);
+    moreBtn.addEventListener("click", () => UI.popover(moreBtn, [
+      { label: "Movimentos recorrentes", icon: "repeat", onClick: manageRecurring },
+      { label: "Fontes de pagamento", icon: "card", onClick: manageSources },
+      { label: "Categorias", icon: "tag", onClick: () => render("cats") },
+    ]));
+    const toolbar = el("div", { class: "toolbar" }, [el("label", { class: "search" }, [ico("search", 20), search]), moreBtn]);
+
+    const bulk = el("div", { class: "bulk-bar hide" });
+    const table = el("section", { class: "panel table" });
+    let selected = new Set();
+
+    function toggle(id) { if (selected.has(id)) selected.delete(id); else selected.add(id); draw(); }
+
+    function drawBulk() {
+      clear(bulk);
+      bulk.classList.toggle("hide", !selected.size);
+      if (!selected.size) return;
+      bulk.append(
+        el("div", { class: "grow", text: selected.size + " selecionado" + (selected.size > 1 ? "s" : "") }),
+        btnI("btn-danger btn-sm", "trash", "Apagar", async () => {
+          const n = selected.size;
+          if (!(await UI.confirm(`Apagar ${n} movimento${n > 1 ? "s" : ""}? Podes anular a seguir.`, { ok: "Apagar", danger: true }))) return;
+          const ids = selected;
+          const snap = Store.get(NS).transactions.filter((t) => ids.has(t.id)).map((t) => JSON.parse(JSON.stringify(t)));
+          Store.update(NS, (s) => { s.transactions = s.transactions.filter((t) => !ids.has(t.id)); });
+          undo(`${n} movimento${n > 1 ? "s apagados" : " apagado"}`, () => Store.update(NS, (s) => { s.transactions.push(...snap); }));
+        }),
+        el("button", { class: "btn btn-ghost btn-sm", text: "Limpar", onclick: () => { selected = new Set(); draw(); } }),
+      );
+    }
+
+    function tableRow(t) {
+      const inc = t.type === "income", tr = t.type === "transfer";
+      const on = selected.has(t.id);
+      const cat = tr ? "Transferência" : (t.category || "Outros");
+      const src = tr ? `${t.account || "?"} → ${t.toAccount || "?"}` : (t.account || "—");
+      return el("div", { class: "t-row" + (on ? " on" : ""), id: "tx-" + t.id, onclick: () => (selected.size ? toggle(t.id) : editTx(t)) }, [
+        el("input", { type: "checkbox", checked: on, "aria-label": "Selecionar " + (t.desc || "movimento"), onclick: (e) => { e.stopPropagation(); toggle(t.id); } }),
+        el("div", { class: "c-name" }, [el("div", { class: "c-title", text: t.desc || "(sem descrição)" }), el("div", { class: "c-meta", text: [ddmm(t.date), cat, src].join(" · ") })]),
+        el("div", { class: "c-soft c-cat", text: cat }),
+        el("div", { class: "c-soft c-src", text: src }),
+        el("div", { class: "c-soft c-date", text: ddmm(t.date) }),
+        el("div", { class: "c-amt money" + (inc ? " pos" : ""), text: signed(t) }),
+        el("button", { class: "c-edit", "aria-label": "Editar", title: "Editar", html: UI.icon("pencil", 16), onclick: (e) => { e.stopPropagation(); editTx(t); } }),
+      ]);
+    }
+
+    function draw() {
+      const q = txQuery.toLowerCase().trim();
+      const all = [...Store.get(NS).transactions]
+        .filter((t) => !q || [t.desc, t.category, t.account].some((v) => (v || "").toLowerCase().includes(q)))
+        .sort((a, b) => (b.date || "").localeCompare(a.date) || (b._c || 0) - (a._c || 0));
+      const shown = all.slice(0, txLimit);
+      const allSel = shown.length > 0 && shown.every((t) => selected.has(t.id));
+      clear(table);
+      table.appendChild(el("div", { class: "t-row t-head" }, [
+        el("input", { type: "checkbox", checked: allSel, "aria-label": "Selecionar todos", onclick: (e) => { e.stopPropagation(); if (allSel) selected = new Set(); else shown.forEach((t) => selected.add(t.id)); draw(); } }),
+        el("div", { text: "Movimento" }), el("div", { text: "Categoria" }), el("div", { text: "Fonte" }), el("div", { text: "Data" }), el("div", { class: "c-amt", text: "Valor" }), el("div"),
+      ]));
+      if (!shown.length) table.appendChild(el("div", { class: "empty", text: q ? "Nenhum movimento encontrado." : "Ainda não há movimentos. Importa o extrato do banco ou adiciona um manualmente." }));
+      shown.forEach((t) => table.appendChild(tableRow(t)));
+      if (all.length > shown.length) table.appendChild(el("div", { class: "center", style: "padding:18px" }, [
+        el("button", { class: "btn btn-sm", text: `Mostrar mais (${all.length - shown.length})`, onclick: () => { txLimit += 200; draw(); } }),
+      ]));
+      drawBulk();
+    }
+    search.addEventListener("input", () => { txQuery = search.value; txLimit = 200; draw(); });
+    draw();
+    view.appendChild(el("div", {}, [toolbar, bulk, table]));
+  }
+
+  /* ----------------------------- CATEGORIAS ----------------------------- */
+  const GROUPS = { essential: "Essencial", lifestyle: "Estilo de vida", income: "Receita" };
+  function renderCats(view) {
+    const fin = Store.get(NS);
+    view.appendChild(pageHead({ eyebrow: "Personaliza o teu registo", icon: "tag", title: "Categorias", sub: "Cria e organiza as categorias que queres usar nos teus movimentos." }));
+
+    const fName = el("input", { placeholder: "Nome da categoria", "aria-label": "Nome da categoria" });
+    const fGroup = el("select", { "aria-label": "Grupo" }, Object.entries(GROUPS).map(([v, l]) => el("option", { value: v }, l)));
+    const addBtn = el("button", { class: "btn btn-primary btn-lg", onclick: guardClick(() => {
+      const name = fName.value.trim(); if (!name) return toast("Escreve o nome da categoria.");
+      if ((Store.get(NS).categories || []).some((x) => x.name.toLowerCase() === name.toLowerCase())) return toast("Essa categoria já existe.");
+      Store.update(NS, (s) => { s.categories = s.categories || []; s.categories.push({ name, group: fGroup.value }); });
+      toast("Categoria criada ✓");
+    }) }, [ico("plus", 18), el("span", { text: "Adicionar" })]);
+    fName.addEventListener("keydown", (e) => { if (e.key === "Enter") addBtn.click(); });
+
+    const counts = {};
+    fin.transactions.forEach((t) => { if (t.type === "transfer") return; const c = t.category || "Outros"; counts[c] = (counts[c] || 0) + 1; });
+    const registered = new Set((fin.categories || []).map((c) => c.name));
+    const implicit = Object.keys(counts).filter((n) => !registered.has(n)).map((name) => ({ name, group: catGroup(name) }));
+    const order = { essential: 0, lifestyle: 1, income: 2 };
+    const cats = [...(fin.categories || []), ...implicit].sort((a, b) => (order[a.group] ?? 3) - (order[b.group] ?? 3) || a.name.localeCompare(b.name));
+
+    const list = el("div", { class: "list cat-list" });
+    cats.forEach((c) => {
+      const n = counts[c.name] || 0;
+      list.appendChild(el("div", { class: "item cat-item" }, [
+        el("span", { class: "item-ico", html: UI.icon("tag", 20) }),
+        el("div", { class: "grow" }, [el("div", { class: "t", text: c.name }), el("div", { class: "s", text: `${GROUPS[c.group] || c.group} · ${n} movimento${n === 1 ? "" : "s"}` })]),
+        btnI("btn-ghost", "pencil", "Editar", () => editCategory(c)),
+        btnI("btn-danger", "trash", "Apagar", () => deleteCategory(c.name)),
+      ]));
+    });
+    if (!cats.length) list.appendChild(el("div", { class: "empty", text: "Ainda não tens categorias." }));
+
     view.appendChild(el("div", { class: "stack" }, [
-      el("div", { class: "row", style: "gap:10px" }, [
-        el("button", { class: "btn btn-soft btn-block", html: "⇪ Importar CSV/Excel/PDF", onclick: () => importInput.click() }),
-        el("button", { class: "btn btn-primary btn-block", text: "+ Manual", onclick: () => editTx(null) }),
-      ]),
-      el("div", { class: "row", style: "gap:10px" }, [
-        el("button", { class: "btn btn-ghost btn-block btn-sm", html: "↻ Recorrentes", onclick: manageRecurring }),
-        el("button", { class: "btn btn-ghost btn-block btn-sm", html: "🏷️ Categorias", onclick: manageCategories }),
-        el("button", { class: "btn btn-ghost btn-block btn-sm", html: "💳 Fontes", onclick: manageSources }),
-      ]),
-      importInput, search, selBar, list,
+      panel({ title: "Nova categoria", sub: "Escolhe também onde se encaixa para os resumos fazerem sentido." }, [el("div", { class: "inline-form" }, [fName, fGroup, addBtn])]),
+      panel({ title: "As tuas categorias", sub: `${cats.length} categorias disponíveis nos movimentos` }, [list]),
     ]));
   }
 
-  function txRow(t, editable, sel) {
-    const sign = t.type === "income" ? "+" : t.type === "transfer" ? "↔" : "−";
-    const color = t.type === "income" ? "var(--good)" : t.type === "transfer" ? "var(--text-mute)" : "var(--text)";
-    const src = t.account ? " · " + t.account : "";
-    const inSelectMode = !!(sel && sel.selectMode);
-    const chk = inSelectMode ? el("input", { type: "checkbox", checked: sel.checked, style: "width:20px;height:20px;flex-shrink:0", onclick: (e) => { e.stopPropagation(); sel.onToggle(); } }) : null;
-    const row = el("div", { class: "item" + (inSelectMode && sel.checked ? " on" : ""), id: "tx-" + t.id, onclick: inSelectMode ? () => sel.onToggle() : null, style: inSelectMode ? "cursor:pointer" : "" }, [
-      chk,
-      el("div", { class: "grow", style: !inSelectMode && editable ? "cursor:pointer" : "", onclick: !inSelectMode && editable ? (e) => { e.stopPropagation(); editTx(t); } : null }, [
-        el("div", { class: "t", text: t.desc || "(sem descrição)" }),
-        el("div", { class: "s", html: `<span class="pill" style="padding:1px 8px">${t.category || "Outros"}</span> &nbsp;${UI.prettyDate(t.date)}${src}` }),
-      ]),
-      el("div", { class: "amt", style: "color:" + color, text: sign + eur(t.amount).replace("€", "") + "€" }),
+  /* ----------------------------- ORÇAMENTOS ----------------------------- */
+  function renderBudgets(view) {
+    const fin = Store.get(NS);
+    const s = D.financeSummary(fin, viewMonth, essentialSet());
+    view.appendChild(pageHead({ eyebrow: "Limites do mês", icon: "target", title: "Orçamentos", sub: "Quanto queres gastar em cada categoria — e quanto já foi.", actions: [monthPill(() => render(current))] }));
+
+    let budgeted = 0, used = 0;
+    Object.entries(fin.budgets || {}).forEach(([c, lim]) => { budgeted += lim; used += s.byCat[c] || 0; });
+    const left = budgeted - used;
+    const kpis = el("div", { class: "kpis" }, [
+      kpi({ label: "Por gastar", value: eur(left), sub: budgeted ? `${Math.round(used / budgeted * 100)}% do orçamento usado` : "Define limites abaixo", icon: "target", variant: left < 0 ? "bad" : "accent" }),
+      kpi({ label: "Orçamentado", value: eur(budgeted), sub: `${Object.keys(fin.budgets || {}).length} categorias com limite`, icon: "wallet" }),
+      kpi({ label: "Gasto nessas categorias", value: eur(used), sub: cap(prettyMonth(viewMonth)), icon: "up" }),
     ]);
-    return row;
+
+    const cats = [...new Set([...Object.keys(fin.budgets || {}), ...Object.keys(s.byCat)])];
+    const rowsData = cats.map((cat) => { const limit = fin.budgets[cat] || 0, spent = s.byCat[cat] || 0; return { cat, limit, spent, pct: limit ? spent / limit * 100 : 0 }; })
+      .sort((a, b) => (b.limit ? 1 : 0) - (a.limit ? 1 : 0) || b.pct - a.pct || b.spent - a.spent);
+    const rows = el("div", { class: "src-rows" });
+    if (!rowsData.length) rows.appendChild(el("div", { class: "empty", text: "Define limites por categoria para acompanhares os gastos." }));
+    rowsData.forEach(({ cat, limit, spent, pct }) => {
+      const tone = !limit ? "" : spent > limit ? "bad" : pct >= 85 ? "warn" : "good";
+      rows.appendChild(el("div", { class: "src-row", onclick: () => setBudget(cat) }, [
+        el("div", { class: "src-top" }, [el("span", { text: cat }), el("span", { class: "money" + (limit && spent > limit ? " neg-strong" : ""), text: limit ? `${eur(spent)} / ${eur(limit)}` : eur(spent) })]),
+        bar(limit ? Math.min(100, pct) : 0, tone),
+        limit && pct >= 85 ? el("div", { class: "tiny", style: "margin-top:8px;color:" + (spent > limit ? "var(--bad)" : "var(--warn)"), text: spent > limit ? `Ultrapassaste em ${eur(spent - limit)}` : spent === limit ? "Limite atingido" : `Atenção: ${Math.round(pct)}% usado` })
+          : !limit ? el("div", { class: "tiny muted", style: "margin-top:8px", text: "Sem limite — toca para definir" }) : null,
+      ]));
+    });
+
+    view.appendChild(el("div", { class: "stack" }, [kpis,
+      panel({ title: "Por categoria", sub: "Toca numa categoria para mudar o limite", action: btnI("btn-soft", "plus", "Definir limite", () => setBudget(null)) }, [rows]),
+    ]));
+  }
+
+  /* ----------------------------- POUPANÇA ----------------------------- */
+  function renderSavings(view) {
+    const fin = Store.get(NS);
+    const { arr, years, total } = savingsData(fin);
+    const curYear = String(new Date().getFullYear());
+    const avg = arr.length ? total / arr.length : 0;
+    view.appendChild(pageHead({ eyebrow: "O que fica", icon: "piggy", title: "Poupança", sub: "Quanto sobra ao fim de cada mês, e para onde vai o resto." }));
+
+    const kpis = el("div", { class: "kpis" }, [
+      kpi({ label: "Poupança total", value: eur(total), sub: `${arr.length} meses registados`, icon: "piggy", variant: total < 0 ? "bad" : "accent" }),
+      kpi({ label: "Em " + curYear, value: eur(years[curYear] || 0), sub: "receitas − despesas este ano", icon: "calendar" }),
+      kpi({ label: "Média por mês", value: eur(avg), sub: "desde o primeiro registo", icon: "chart" }),
+    ]);
+
+    const last = arr.slice(-12).map((m) => {
+      const [y, mm] = m.mk.split("-").map(Number);
+      return { mk: m.mk, label: UI.MONTHS[mm - 1].slice(0, 3), title: cap(prettyMonth(m.mk)), value: m.save, cur: m.mk === monthKey() };
+    });
+    const chartPanel = panel({ title: "Poupança por mês", sub: "Últimos 12 meses", icon: "chart" }, [
+      last.length ? evoChart(last, (m) => { viewMonth = m.mk; render("resumo"); }) : el("div", { class: "empty", text: "Sem dados ainda." }),
+    ]);
+
+    const byCat = {};
+    (fin.transactions || []).forEach((t) => { if (t.type === "expense" && (t.date || "").slice(0, 4) === curYear) byCat[t.category || "Outros"] = (byCat[t.category || "Outros"] || 0) + t.amount; });
+    const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+    const totalExp = cats.reduce((a, c) => a + c[1], 0);
+    const colors = colorsForCount(cats.length);
+    const catPanel = panel({ title: "Onde gastas mais", sub: "Despesas de " + curYear }, [
+      cats.length ? dotRows(cats.map(([label, value], i) => ({ label, value, color: colors[i] })), totalExp,
+        (p) => showTxSheet(p.label + " · " + curYear, (fin.transactions || []).filter((t) => t.type === "expense" && (t.date || "").slice(0, 4) === curYear && (t.category || "Outros") === p.label)))
+        : el("div", { class: "empty", text: "Sem despesas este ano ainda." }),
+    ]);
+
+    const ykeys = Object.keys(years).sort((a, b) => b.localeCompare(a));
+    const yearsPanel = panel({ title: "Por ano", sub: "Receitas menos despesas" }, [
+      ykeys.length ? el("div", { class: "list" }, ykeys.map((y) => el("div", { class: "item" }, [
+        el("div", { class: "grow" }, [el("div", { class: "t", text: y })]),
+        el("div", { class: "amt", style: "color:" + (years[y] >= 0 ? "var(--accent-ink)" : "var(--bad)"), text: eur(years[y]) }),
+      ]))) : el("div", { class: "empty", text: "Sem dados ainda." }),
+    ]);
+
+    view.appendChild(el("div", { class: "stack" }, [kpis, chartPanel, el("div", { class: "grid-2" }, [catPanel, yearsPanel])]));
+  }
+
+  /* ----------------------------- PATRIMÓNIO ----------------------------- */
+  function renderNet(view) {
+    const fin = Store.get(NS);
+    const nw = D.netWorth(fin);
+    if ((fin.nwHistory || {})[monthKey()] !== nw.net) Store.update(NS, (s) => { s.nwHistory = s.nwHistory || {}; s.nwHistory[monthKey()] = nw.net; }, { silent: true, keepTime: true });
+    view.appendChild(pageHead({ eyebrow: "O que tens e o que deves", icon: "scale", title: "Património", sub: "O teu património líquido e como tem evoluído." }));
+
+    const kpis = el("div", { class: "kpis" }, [
+      kpi({ label: "Património líquido", value: eur(nw.net), sub: "ativos − passivos", icon: "scale", variant: nw.net < 0 ? "bad" : "accent" }),
+      kpi({ label: "Ativos", value: eur(nw.assets), sub: "o que tens", icon: "bank" }),
+      kpi({ label: "Passivos", value: eur(nw.liab), sub: "o que deves", icon: "card", variant: "bad" }),
+    ]);
+
+    const hist = Object.entries(fin.nwHistory || {}).sort((a, b) => a[0].localeCompare(b[0])).slice(-12);
+    let histPanel = null;
+    if (hist.length >= 2) {
+      const delta = hist[hist.length - 1][1] - hist[0][1];
+      histPanel = panel({ title: "Evolução", sub: `${delta >= 0 ? "+" : ""}${eur(delta)} desde ${prettyMonth(hist[0][0])}`, icon: "chart" }, [
+        UI.lineChart(hist.map((h) => h[1]), { labels: [cap(prettyMonth(hist[0][0])), cap(prettyMonth(hist[hist.length - 1][0]))], height: 120, color: "var(--accent)" }),
+      ]);
+    }
+
+    const side = (type, title, sub) => {
+      const items = (fin.assets || []).filter((a) => (a.type === "liability") === (type === "liability"));
+      return panel({ title, sub, action: el("button", { class: "btn btn-soft btn-icon", "aria-label": "Adicionar", html: UI.icon("plus", 18), onclick: () => editAsset(null, type) }) }, [
+        items.length ? el("div", { class: "list" }, items.map((a) => el("div", { class: "item", style: "cursor:pointer", onclick: () => editAsset(a) }, [
+          el("span", { class: "item-ico", html: UI.icon(type === "liability" ? "card" : "bank", 20) }),
+          el("div", { class: "grow" }, [el("div", { class: "t", text: a.name })]),
+          el("div", { class: "amt", style: type === "liability" ? "color:var(--bad)" : "", text: eur(a.value) }),
+        ]))) : el("div", { class: "empty", text: type === "liability" ? "Sem dívidas registadas." : "Adiciona contas, investimentos, bens…" }),
+      ]);
+    };
+
+    view.appendChild(el("div", { class: "stack" }, [kpis, histPanel, el("div", { class: "grid-2" }, [side("asset", "Ativos", "O que tens"), side("liability", "Passivos", "O que deves")])].filter(Boolean)));
   }
 
   function editTx(t) {
@@ -670,26 +876,56 @@
     ]);
     return sh;
   }
-  // parentSheet: sheet de onde foi aberto (a lista "Categorias"). Fechamo-lo ao guardar/apagar
-  // para não empilhar folhas por cima umas das outras (bug: era preciso "andar para trás" várias vezes).
+  // parentSheet: a lista "Categorias" (sheet) de onde foi aberto — fecha-a e reabre-a ao guardar,
+  // para não empilhar folhas. Sem parentSheet (aberto do separador Categorias) só fecha.
   function editCategory(c, parentSheet) {
     const isNew = !c; const old = c ? c.name : "";
     c = c || { name: "", group: "lifestyle" };
     const fn = field("Nome", { value: c.name, placeholder: "ex: Viagens" });
-    const fg = field("Grupo", { type: "select", value: c.group, options: [{ value: "essential", label: "Essencial" }, { value: "lifestyle", label: "Estilo de vida" }, { value: "income", label: "Receita" }] });
+    const fg = field("Grupo", { type: "select", value: c.group, options: Object.entries(GROUPS).map(([value, label]) => ({ value, label })) });
     const back = () => { sh.close(); if (parentSheet) { parentSheet.close(); manageCategories(); } };
-    const sh = sheet(isNew ? "Nova categoria" : "Editar categoria", [fn, fg, el("div", { class: "row", style: "gap:10px" }, [
-      !isNew ? el("button", { class: "btn btn-block", style: "color:var(--bad)", text: "Apagar", onclick: () => { Store.update(NS, (s) => { s.categories = s.categories.filter((x) => x.name !== old); }); back(); } }) : null,
-      el("button", { class: "btn btn-primary btn-block", text: "Guardar", onclick: guardClick(() => {
-        const name = fn.input.value.trim(); if (!name) return toast("Indica o nome.");
-        Store.update(NS, (s) => {
-          const i = s.categories.findIndex((x) => x.name === old);
-          if (i >= 0) { s.categories[i] = { name, group: fg.input.value }; if (old !== name) s.transactions.forEach((t) => { if (t.category === old) t.category = name; }); }
-          else if (!s.categories.some((x) => x.name === name)) s.categories.push({ name, group: fg.input.value });
-        });
-        back();
-      })}),
-    ])]);
+    const sh = sheet(isNew ? "Nova categoria" : "Editar categoria", [fn, fg,
+      isNew ? null : el("p", { class: "tiny muted", style: "margin:0", text: "Mudar o nome atualiza também os movimentos, recorrentes e orçamentos com esta categoria." }),
+      el("div", { class: "row", style: "gap:10px;margin-top:6px" }, [
+        !isNew ? el("button", { class: "btn btn-danger btn-block", text: "Apagar", onclick: async () => { if (await deleteCategory(old)) back(); } }) : null,
+        el("button", { class: "btn btn-primary btn-block", text: "Guardar", onclick: guardClick(() => {
+          const name = fn.input.value.trim(); if (!name) return toast("Indica o nome.");
+          if (name !== old && (Store.get(NS).categories || []).some((x) => x.name === name)) return toast("Já existe uma categoria com esse nome.");
+          Store.update(NS, (s) => {
+            s.categories = s.categories || [];
+            const i = s.categories.findIndex((x) => x.name === old);
+            if (i >= 0) s.categories[i] = { name, group: fg.input.value }; else s.categories.push({ name, group: fg.input.value });
+            if (old && old !== name) {
+              s.transactions.forEach((t) => { if (t.category === old) t.category = name; });
+              (s.recurring || []).forEach((r) => { if (r.category === old) r.category = name; });
+              if (s.budgets && old in s.budgets) { s.budgets[name] = s.budgets[old]; delete s.budgets[old]; }
+              for (const k in s.categoryRules || {}) if (s.categoryRules[k] === old) s.categoryRules[k] = name;
+            }
+          });
+          toast("Guardado ✓"); back();
+        }) }),
+      ]),
+    ]);
+  }
+
+  /** Apaga uma categoria; os movimentos que a usavam passam para "Outros". */
+  async function deleteCategory(name) {
+    const n = Store.get(NS).transactions.filter((t) => t.type !== "transfer" && (t.category || "Outros") === name).length;
+    if (name === "Outros" && n) { toast("\"Outros\" é a categoria por defeito — ainda tem movimentos."); return false; }
+    const msg = n ? `Apagar "${name}"? ${n === 1 ? "O movimento" : `Os ${n} movimentos`} com esta categoria passa${n === 1 ? "" : "m"} para "Outros".` : `Apagar a categoria "${name}"?`;
+    if (!(await UI.confirm(msg, { ok: "Apagar", danger: true }))) return false;
+    Store.update(NS, (s) => {
+      s.categories = (s.categories || []).filter((x) => x.name !== name);
+      if (n) {
+        s.transactions.forEach((t) => { if (t.type !== "transfer" && (t.category || "Outros") === name) t.category = "Outros"; });
+        if (!s.categories.some((x) => x.name === "Outros")) s.categories.push({ name: "Outros", group: "lifestyle" });
+      }
+      (s.recurring || []).forEach((r) => { if (r.category === name) r.category = "Outros"; });
+      if (s.budgets) delete s.budgets[name];
+      for (const k in s.categoryRules || {}) if (s.categoryRules[k] === name) delete s.categoryRules[k];
+    });
+    toast("Categoria apagada");
+    return true;
   }
   function manageSources() {
     const fin = Store.get(NS);
@@ -986,34 +1222,6 @@
   }
 
   /* ----------------------------- ORÇAMENTOS ----------------------------- */
-  function renderBudgets(view) {
-    const fin = Store.get(NS);
-    const s = D.financeSummary(fin, viewMonth, essentialSet());
-    $("#subtitle").textContent = "Orçamentos mensais";
-    const cats = new Set([...Object.keys(fin.budgets), ...Object.keys(s.byCat)]);
-    const list = el("div", { class: "stack" });
-    if (!cats.size) list.appendChild(el("div", { class: "card empty", text: "Define limites por categoria para acompanhares os gastos." }));
-    [...cats].sort().forEach((cat) => {
-      const limit = fin.budgets[cat] || 0; const spent = s.byCat[cat] || 0;
-      const pct = limit ? (spent / limit) * 100 : 0;
-      const tone = !limit ? "" : pct >= 100 ? "bad" : pct >= 85 ? "warn" : "good";
-      const b = bar(Math.min(100, pct), tone);
-      list.appendChild(el("div", { class: "card", onclick: () => setBudget(cat), style: "cursor:pointer" }, [
-        el("div", { class: "row", style: "justify-content:space-between" }, [
-          el("strong", { text: cat }),
-          el("span", { class: "tiny num " + (pct >= 100 ? "" : "muted"), style: pct >= 100 ? "color:var(--bad);font-weight:700" : "", text: limit ? `${eur0(spent)} / ${eur0(limit)}` : eur0(spent) + " (sem limite)" }),
-        ]),
-        b,
-        limit && pct >= 85 ? el("div", { class: "tiny", style: "margin-top:6px;color:" + (pct >= 100 ? "var(--bad)" : "var(--warn)"), text: pct >= 100 ? `⚠ Ultrapassaste em ${eur0(spent - limit)}` : `Atenção: ${Math.round(pct)}% usado` }) : null,
-      ]));
-    });
-    view.appendChild(monthNav(() => render(current)));
-    view.appendChild(el("div", { class: "stack" }, [
-      el("button", { class: "btn btn-primary btn-block", text: "+ Definir limite de categoria", onclick: () => setBudget(null) }),
-      list,
-    ]));
-  }
-
   function setBudget(cat) {
     const fin = Store.get(NS);
     const fCat = field("Categoria", { value: cat || "", list: "bcats" });
@@ -1046,105 +1254,6 @@
     const years = {}; arr.forEach((m) => { const y = m.mk.slice(0, 4); years[y] = (years[y] || 0) + m.save; });
     const total = arr.reduce((a, m) => a + m.save, 0);
     return { arr, years, total };
-  }
-
-  function renderSavings(view) {
-    const fin = Store.get(NS);
-    $("#subtitle").textContent = "Quanto estás a poupar";
-    const { arr, years, total } = savingsData(fin);
-    const curYear = String(new Date().getFullYear());
-    const thisYear = years[curYear] || 0;
-    const avg = arr.length ? total / arr.length : 0;
-
-    const hero = el("div", { class: "hero" }, [
-      el("div", { class: "label", text: "Poupança total" }),
-      el("div", { class: "value", text: eur(total) }),
-      el("div", { class: "foot", text: `${curYear}: ${eur0(thisYear)} · média ${eur0(avg)}/mês` }),
-    ]);
-
-    // Gráfico mensal de poupança (últimos 12) — verde/vermelho
-    let chart = null;
-    if (arr.length) {
-      const last = arr.slice(-12);
-      const maxV = Math.max(1, ...last.map((m) => Math.abs(m.save)));
-      const bars = el("div", { class: "row", style: "align-items:center;gap:8px;height:120px;margin-top:12px;position:relative" });
-      last.forEach((m) => {
-        const h = Math.max(3, (Math.abs(m.save) / maxV) * 48);
-        const up = m.save >= 0;
-        bars.appendChild(el("div", { style: "flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:2px" }, [
-          el("div", { style: "flex:1;display:flex;flex-direction:column;justify-content:flex-end;width:100%;align-items:center" }, [up ? el("div", { style: `width:100%;max-width:22px;height:${h}px;border-radius:5px 5px 0 0;background:var(--good)` }) : el("div", { style: "height:0" })]),
-          el("div", { style: "height:1px;width:100%;background:var(--border-2)" }),
-          el("div", { style: "flex:1;display:flex;flex-direction:column;justify-content:flex-start;width:100%;align-items:center" }, [!up ? el("div", { style: `width:100%;max-width:22px;height:${h}px;border-radius:0 0 5px 5px;background:var(--bad)` }) : el("div", { style: "height:0" })]),
-          el("div", { class: "tiny muted", style: "font-size:.58rem", text: m.mk.slice(5) }),
-        ]));
-      });
-      chart = el("div", { class: "card" }, [el("strong", { text: "Poupança por mês" }), bars]);
-    }
-
-    // Por ano
-    const yearsCard = el("div", { class: "card" }, [el("strong", { text: "Por ano" })]);
-    const ykeys = Object.keys(years).sort((a, b) => b.localeCompare(a));
-    if (!ykeys.length) yearsCard.appendChild(el("div", { class: "empty tiny", text: "Sem dados ainda." }));
-    else { const list = el("div", { class: "list" }); ykeys.forEach((y) => list.appendChild(el("div", { class: "item" }, [
-      el("div", { class: "grow t", text: y }), el("div", { class: "amt", style: "color:" + (years[y] >= 0 ? "var(--good)" : "var(--bad)"), text: eur(years[y]) })])));
-      yearsCard.appendChild(list); }
-
-    // Donut: categorias onde gastou mais (ano atual)
-    const byCat = {};
-    (fin.transactions || []).forEach((t) => { if (t.type === "expense" && (t.date || "").slice(0, 4) === curYear) byCat[t.category] = (byCat[t.category] || 0) + t.amount; });
-    const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
-    const totalExp = cats.reduce((a, c) => a + c[1], 0) || 1;
-    const catColors2 = colorsForCount(cats.length);
-    const catCard = donutCard({
-      title: "Onde gastas mais · " + curYear,
-      parts: cats.map(([name, value], i) => ({ label: name, value, color: catColors2[i] })),
-      totalValue: eur0(totalExp), totalLabel: "gasto em " + curYear,
-      empty: '<span class="ico">🥧</span>Sem despesas este ano ainda.',
-      onOpen: (p) => showTxSheet(p.label + " · " + curYear, (fin.transactions || []).filter((t) => t.type === "expense" && (t.date || "").slice(0, 4) === curYear && (t.category || "Outros") === p.label)),
-    });
-
-    view.appendChild(el("div", { class: "stack" }, [hero, chart, catCard, yearsCard].filter(Boolean)));
-  }
-
-  /* ----------------------------- PATRIMÓNIO ----------------------------- */
-  function renderNet(view) {
-    const fin = Store.get(NS);
-    const nw = D.netWorth(fin);
-    $("#subtitle").textContent = "Património líquido";
-    // snapshot do mês atual
-    if ((fin.nwHistory || {})[monthKey()] !== nw.net) Store.update(NS, (s) => { s.nwHistory = s.nwHistory || {}; s.nwHistory[monthKey()] = nw.net; }, { silent: true, keepTime: true });
-
-    const head = el("div", { class: "hero" }, [
-      el("div", { class: "label", text: "Património líquido" }),
-      el("div", { class: "value", text: eur(nw.net) }),
-      el("div", { class: "row", style: "gap:16px;margin-top:8px" }, [
-        el("span", { class: "foot", html: `● Ativos ${eur0(nw.assets)}` }),
-        el("span", { class: "foot", html: `● Passivos ${eur0(nw.liab)}` }),
-      ]),
-    ]);
-
-    // histórico
-    const hist = Object.entries(fin.nwHistory || {}).sort((a, b) => a[0].localeCompare(b[0])).slice(-12);
-    let histCard = null;
-    if (hist.length >= 2) {
-      const delta = hist[hist.length - 1][1] - hist[0][1];
-      histCard = el("div", { class: "card" }, [
-        el("div", { class: "row between" }, [el("strong", { text: "Evolução" }), el("span", { class: "tiny num", style: "color:" + (delta >= 0 ? "var(--good)" : "var(--bad)"), text: (delta >= 0 ? "+" : "") + eur0(delta) })]),
-        UI.lineChart(hist.map((h) => h[1]), { labels: [UI.prettyMonth(hist[0][0]).split(" ")[0], UI.prettyMonth(hist[hist.length - 1][0]).split(" ")[0]], height: 76, color: "var(--accent)" }),
-      ]);
-    }
-
-    const mk = (type, title) => {
-      const items = (fin.assets || []).filter((a) => (a.type === "liability") === (type === "liability"));
-      const card = el("div", { class: "card" }, [el("div", { class: "row", style: "justify-content:space-between" }, [el("strong", { text: title }), el("button", { class: "btn btn-soft btn-sm", text: "+", onclick: () => editAsset(null, type) })])]);
-      if (!items.length) card.appendChild(el("div", { class: "empty tiny", text: "—" }));
-      else { const list = el("div", { class: "list" }); items.forEach((a) => list.appendChild(el("div", { class: "item", style: "cursor:pointer", onclick: () => editAsset(a) }, [
-        el("div", { class: "grow t", text: a.name }), el("div", { class: "amt", style: type === "liability" ? "color:var(--bad)" : "", text: eur(a.value) }),
-      ]))); card.appendChild(list); }
-      return card;
-    };
-
-    view.appendChild(el("div", { class: "stack" }, [head, histCard, mk("asset", "Ativos (o que tens)"), mk("liability", "Passivos (o que deves)")].filter(Boolean)));
   }
 
   function editAsset(a, type) {

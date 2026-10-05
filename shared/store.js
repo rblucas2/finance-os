@@ -43,12 +43,14 @@
   // Para cada array de nível 1 cujos itens tenham "id" (habits, transactions, foods, …),
   // regista em data._tomb[key][id] quando um id desaparece do array. O sync.js usa isto
   // para não voltar a inserir esse item ao fazer merge com um dispositivo desatualizado.
+  // Itens identificados por "id" (movimentos, fontes, separadores…) ou, sem id, por "name" (categorias).
+  const keyOfItem = (x) => ("id" in x ? x.id : x.name);
   function snapshotIds(data) {
     const out = {};
     for (const k in data) {
       const v = data[k];
-      if (Array.isArray(v) && v.length && v.every((x) => x && typeof x === "object" && "id" in x)) {
-        out[k] = new Set(v.map((x) => String(x.id)));
+      if (Array.isArray(v) && v.length && v.every((x) => x && typeof x === "object" && ("id" in x || "name" in x))) {
+        out[k] = new Set(v.map((x) => String(keyOfItem(x))));
       }
     }
     return out;
@@ -57,7 +59,7 @@
   function trackTombstones(data, before) {
     for (const k in before) {
       const v = data[k];
-      const afterIds = new Set(Array.isArray(v) ? v.map((x) => x && String(x.id)) : []);
+      const afterIds = new Set(Array.isArray(v) ? v.map((x) => x && String(keyOfItem(x))) : []);
       const removed = [...before[k]].filter((id) => !afterIds.has(id));
       if (removed.length) {
         data._tomb = data._tomb || {};

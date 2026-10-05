@@ -6,15 +6,15 @@
   const { el, $, toast } = UI;
 
   // ---- Tema: segue o sistema, com override manual opcional ------------
+  // Tema: escuro por defeito; "claro" ou "automático" (segue o sistema) nas Definições.
+  const themePref = () => Store.get("sys").look || "dark";   // dark | light | auto
   function applyTheme() {
-    const pref = Store.get("sys").theme || "auto";   // auto | light | dark
-    const root = document.documentElement;
-    if (pref === "auto") root.removeAttribute("data-theme");
-    else root.setAttribute("data-theme", pref);
-    const isDark = pref === "dark" || (pref === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+    const pref = themePref();
+    document.documentElement.setAttribute("data-theme", pref);
+    const isLight = pref === "light" || (pref === "auto" && matchMedia("(prefers-color-scheme: light)").matches);
     let meta = $('meta[name="theme-color"]');
     if (!meta) { meta = el("meta", { name: "theme-color" }); document.head.appendChild(meta); }
-    meta.setAttribute("content", isDark ? "#121212" : "#f6f6f4");
+    meta.setAttribute("content", isLight ? "#f2f5f1" : "#121a16");
   }
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
 
@@ -64,7 +64,7 @@
       location.reload();
     }});
     lockEl = el("div", { class: "lockscreen" }, [
-      el("div", { class: "lock-ico", text: "🔒" }),
+      el("div", { class: "lock-ico", html: UI.icon("lock", 28) }),
       el("h2", { text: "Finanças bloqueadas", style: "margin:6px 0 14px" }),
       input,
       el("button", { class: "btn btn-primary", style: "margin-top:12px;min-width:220px", text: "Desbloquear", onclick: tryUnlock }),
@@ -137,9 +137,9 @@
   // ---- Definições -----------------------------------------------------
   function openSettings() {
     const sys = Store.get("sys");
-    const themeSel = UI.field("Tema", { type: "select", value: sys.theme || "auto",
-      options: [{ value: "auto", label: "Automático (segue o sistema)" }, { value: "light", label: "Claro" }, { value: "dark", label: "Escuro" }] });
-    themeSel.input.addEventListener("change", () => { Store.update("sys", (s) => { s.theme = themeSel.input.value; }, { silent: true }); applyTheme(); });
+    const themeSel = UI.field("Tema", { type: "select", value: themePref(),
+      options: [{ value: "dark", label: "Escuro" }, { value: "light", label: "Claro" }, { value: "auto", label: "Automático (segue o sistema)" }] });
+    themeSel.input.addEventListener("change", () => { Store.update("sys", (s) => { s.look = themeSel.input.value; }, { silent: true }); applyTheme(); });
 
     // --- Conta e sincronização ---
     const syncState = el("span", { class: "pill" });
@@ -253,12 +253,23 @@
 
   const App = {
     boot() {
-      Store.ensure("sys", { theme: "auto" });
+      Store.ensure("sys", {});
       applyTheme();
       registerSW();
       autoMigrate();
       showLock();
       Sync.init();
+      $("#settingsBtn").innerHTML = UI.icon("settings", 22);
+      $("#settingsBtn").addEventListener("click", openSettings);
+      $("#avatarBtn").addEventListener("click", openSettings);
+      // Avatar: inicial do email quando há sessão iniciada; nuvem riscada quando a sincronização está desligada.
+      Sync.onStatus((st) => {
+        const a = $("#avatarBtn"); const email = Sync.email;
+        const on = Sync.enabled && email;
+        a.classList.toggle("off", !on);
+        if (on) a.textContent = email[0].toUpperCase(); else a.innerHTML = UI.icon("cloudOff", 20);
+        a.title = on ? `Sessão: ${email}` + (st === "error" ? " · erro de sincronização" : "") : "Sincronização desligada — toca para ligar";
+      });
     },
     applyTheme, promptInstall, openSettings, onboard,
   };

@@ -8,14 +8,14 @@ HTML/CSS/JS puro: sem build, sem dependências, sem servidor próprio.
 
 ```
 index.html            App
-finance.js            Ecrãs: Resumo, Movimentos, Orçamentos, Poupança, Património + separadores personalizados
+finance.js            Ecrãs: Resumo, Movimentos, Categorias, Orçamentos, Poupança, Património + separadores personalizados
 shared/
   ui.js               Helpers de interface (DOM, sheets, gráficos)
   store.js            Estado local (localStorage, prefixo "financeos:")
   sync.js             Sincronização privada (Supabase Auth + Row Level Security)
   domain.js           Regras de negócio (resumo do mês, património, saldos, categorização)
   app.js              Arranque, Definições, bloqueio com PIN, migração da Vida OS
-  base.css            Design system (claro/escuro automático)
+  base.css            Design system (escuro por defeito; claro ou automático nas Definições)
 sw.js                 Service worker (offline)
 manifest.webmanifest  PWA (instalável / publicável)
 icons/
