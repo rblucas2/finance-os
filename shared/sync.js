@@ -110,9 +110,9 @@
   }
 
   // Listas identificadas por "id"/"name" e objetos-por-chave — merge sem perdas entre dispositivos.
-  const ID_ARRAYS = ["transactions", "assets", "recurring", "sources", "tabs"];
+  const ID_ARRAYS = ["transactions", "assets", "recurring", "sources", "tabs", "goals"];
   const NAME_ARRAYS = ["categories"];
-  const KEYED_OBJ = ["budgets", "categoryRules", "nwHistory"];
+  const KEYED_OBJ = ["budgets", "categoryRules", "nwHistory", "subsIgnored"];
 
   function mergeTomb(a, b) {
     const out = {};

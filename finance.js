@@ -10,7 +10,7 @@
 
   function init() {
     App.boot();
-    Store.ensure(NS, { transactions: [], budgets: {}, assets: [], categoryRules: {}, nwHistory: {}, recurring: [], sources: [], categories: [], tabs: [] });
+    Store.ensure(NS, { transactions: [], budgets: {}, assets: [], categoryRules: {}, nwHistory: {}, recurring: [], sources: [], categories: [], tabs: [], goals: [], subsIgnored: {} });
     seedFinance();
     ensureTabs();
     applyRecurring();
@@ -29,6 +29,7 @@
     $(".brand").addEventListener("click", (e) => { e.preventDefault(); const first = visibleTabs()[0]; if (first) render(first.id); });
     Store.subscribe(NS, () => render(current));
     render(Store.get("sys").lastTab || "resumo");
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => fitNav());
   }
 
   /* ----------------------------- SEPARADORES ----------------------------- */
@@ -39,7 +40,9 @@
     { id: "tx", type: "tx", name: "Movimentos" },
     { id: "cats", type: "cats", name: "Categorias" },
     { id: "budgets", type: "budgets", name: "Orçamentos" },
+    { id: "subs", type: "subs", name: "Subscrições" },
     { id: "savings", type: "savings", name: "Poupança" },
+    { id: "goals", type: "goals", name: "Objetivos" },
     { id: "net", type: "net", name: "Património" },
   ];
   const CUSTOM_TYPES = {
@@ -72,9 +75,17 @@
     const bar = clear($("#tabs"));
     visibleTabs().forEach((t) => bar.appendChild(el("button", { "data-tab": t.id, class: t.id === current ? "active" : "", "aria-current": t.id === current ? "page" : null, text: t.name })));
     bar.appendChild(el("button", { class: "seg-edit", title: "Organizar separadores", "aria-label": "Organizar separadores", html: UI.icon("sliders", 18) }));
+    fitNav();
     const active = bar.querySelector("button.active");
     if (active && active.scrollIntoView) active.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
+  /** Se os separadores não couberem ao lado do logótipo, passam para uma segunda linha. */
+  function fitNav() {
+    const nav = $(".nav-in"), bar = $("#tabs");
+    nav.classList.remove("wrap2");
+    if (bar.scrollWidth > bar.clientWidth + 2) nav.classList.add("wrap2");
+  }
+  window.addEventListener("resize", () => fitNav());
 
   let current = "";
   function render(tabId) {
@@ -86,7 +97,7 @@
     drawTabs();
     const y = window.scrollY;
     const view = clear($("#view"));
-    const fn = { resumo: renderResumo, tx: renderTx, cats: renderCats, budgets: renderBudgets, savings: renderSavings, net: renderNet, filter: renderFilterTab, notes: renderNotesTab }[tab.type] || renderResumo;
+    const fn = { resumo: renderResumo, tx: renderTx, cats: renderCats, budgets: renderBudgets, subs: renderSubs, savings: renderSavings, goals: renderGoals, net: renderNet, filter: renderFilterTab, notes: renderNotesTab }[tab.type] || renderResumo;
     fn(view, tab);
     window.scrollTo(0, switching ? 0 : y);
   }
@@ -196,7 +207,7 @@
 
   /* -------- Separador personalizado: movimentos filtrados -------- */
   function matchesTab(t, tab) {
-    if (t.type === "transfer") return false;
+    if (t.type === "transfer" || t.type === "adjust") return false;
     if (tab.kind && tab.kind !== "all" && t.type !== tab.kind) return false;
     if (tab.categories && tab.categories.length && !tab.categories.includes(t.category || "Outros")) return false;
     if (tab.sources && tab.sources.length && !tab.sources.includes(t.account)) return false;
@@ -280,7 +291,8 @@
   /* ----------------------------- COMPONENTES ----------------------------- */
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   const ico = (name, size = 20) => el("span", { class: "ico", style: "display:inline-flex", html: UI.icon(name, size) });
-  const signed = (t) => (t.type === "income" ? "+" : t.type === "transfer" ? "" : "-") + eur(t.amount);
+  const signed = (t) => t.type === "adjust" ? (t.amount >= 0 ? "+" : "-") + eur(Math.abs(t.amount)) : (t.type === "income" ? "+" : t.type === "transfer" ? "" : "-") + eur(t.amount);
+  const isPos = (t) => t.type === "income" || (t.type === "adjust" && t.amount >= 0);
   function ddmm(iso) {
     if (!iso) return "";
     const same = iso.slice(0, 4) === String(new Date().getFullYear());
@@ -357,10 +369,10 @@
 
   /** Linha de movimento com bolha (listas do Resumo, sheets, separadores filtrados). */
   function txRow(t, editable = true) {
-    const inc = t.type === "income", tr = t.type === "transfer";
-    const sub = [tr ? `${t.account || "?"} → ${t.toAccount || "?"}` : (t.category || "Outros"), ddmm(t.date)].join(" · ");
+    const inc = isPos(t), tr = t.type === "transfer", adj = t.type === "adjust";
+    const sub = [tr ? `${t.account || "?"} → ${t.toAccount || "?"}` : adj ? `Acerto de saldo · ${t.account || ""}` : (t.category || "Outros"), ddmm(t.date)].join(" · ");
     return el("div", { class: "tx-line", style: editable ? "" : "cursor:default", onclick: editable ? () => editTx(t) : null }, [
-      el("span", { class: "bubble" + (inc ? " in" : ""), html: UI.icon(tr ? "repeat" : inc ? "down" : "up", 20) }),
+      el("span", { class: "bubble" + (inc ? " in" : ""), html: UI.icon(adj ? "scale" : tr ? "repeat" : inc ? "down" : "up", 20) }),
       el("div", { class: "tl-main" }, [el("div", { class: "tl-title", text: t.desc || "(sem descrição)" }), el("div", { class: "tl-sub", text: sub })]),
       el("div", { class: "money" + (inc ? " pos" : ""), text: signed(t) }),
     ]);
@@ -427,7 +439,14 @@
       top.length ? txRows(top) : el("div", { class: "empty", text: "Sem despesas neste mês." }),
     ]);
 
-    view.appendChild(el("div", { class: "stack" }, [kpis, sourcePanel(), catPanel, splitPanel, evoPanel, topPanel]));
+    const cur = viewMonth === monthKey();
+    const subs = subsOf(fin);
+    const fc = cur ? D.forecastMonth(fin, todayISO(), subs) : null;
+    const insights = insightsPanel(buildInsights(fin, viewMonth, fc, subs), cur);
+    const top2 = cur
+      ? [el("div", { class: "grid-2" }, [forecastPanel(fin, fc), insights]), el("div", { class: "grid-2" }, [upcomingPanel(D.upcoming(fin, todayISO(), subs)), sourcePanel()])]
+      : [insights, sourcePanel()];
+    view.appendChild(el("div", { class: "stack" }, [kpis, ...top2, catPanel, splitPanel, evoPanel, topPanel]));
   }
 
   function freeSheet(s) {
@@ -452,22 +471,376 @@
     ]);
   }
 
-  /** Painel "Saldo por fonte" — quanto há em cada conta/cartão/dinheiro. */
+  /** Painel "Saldo por fonte" — quanto há hoje em cada conta/cartão/dinheiro. Tocar acerta o saldo. */
   function sourcePanel() {
     const fin = Store.get(NS);
-    const { list, total } = D.sourceBalances(fin);
+    const today = todayISO();
+    const { list, total } = D.sourceBalances(fin, today);
     const max = Math.max(1, ...list.map((x) => Math.abs(x.balance)));
     const rows = el("div", { class: "src-rows" });
     if (!list.length) rows.appendChild(el("div", { class: "empty", text: "Sem fontes de pagamento ainda." }));
     [...list].sort((a, b) => b.balance - a.balance).forEach((src) => {
       const neg = src.balance < 0;
-      rows.appendChild(el("div", { class: "src-row", onclick: () => { const so = (fin.sources || []).find((x) => x.name === src.name); editSource(so || null, { presetName: src.name }); } }, [
-        el("div", { class: "src-top" }, [el("span", { text: src.name }), el("span", { class: "money" + (neg ? " neg-strong" : ""), text: eur(src.balance) })]),
+      const days = src.reconciledAt ? D.daysBetween(src.reconciledAt, today) : null;
+      rows.appendChild(el("div", { class: "src-row", title: "Tocar para acertar com o banco", onclick: () => reconcileSource(src.name) }, [
+        el("div", { class: "src-top" }, [
+          el("span", {}, [src.name, el("span", { class: "src-sub", text: days == null ? "nunca acertado" : days === 0 ? "acertado hoje" : `acertado há ${days} dia${days === 1 ? "" : "s"}` })]),
+          el("span", { class: "money" + (neg ? " neg-strong" : ""), text: eur(src.balance) }),
+        ]),
         bar(Math.abs(src.balance) / max * 100, neg ? "bad" : ""),
       ]));
     });
-    return panel({ title: "Saldo por fonte", sub: "Onde o teu dinheiro está agora · total " + eur(total), icon: "bank" }, [
+    return panel({ title: "Saldo por fonte", sub: "Hoje · total " + eur(total) + " · toca para acertar", icon: "bank" }, [
       rows, el("div", { style: "margin-top:20px" }, [btnI("btn-ghost btn-sm", "card", "Gerir fontes", manageSources)]),
+    ]);
+  }
+
+  /* ----------------------------- PREVISÃO E PRÓXIMOS PAGAMENTOS ----------------------------- */
+  const subsOf = (fin) => D.detectSubscriptions(fin, todayISO(), fin.subsIgnored || {});
+  const inDays = (date) => { const n = D.daysBetween(todayISO(), date); return n === 0 ? "hoje" : n === 1 ? "amanhã" : `em ${n} dias`; };
+
+  function forecastPanel(fin, fc) {
+    const avg = D.avgMonthly(fin, monthKey(), 3);
+    const line = (label, value, sign) => el("div", { class: "fc-row" }, [el("span", { text: label }), el("span", { class: "money", text: (sign || "") + eur(value) })]);
+    const lastDay = fc.lastDay.slice(8, 10) + " de " + UI.MONTHS[+fc.lastDay.slice(5, 7) - 1];
+    return panel({ title: "Previsão do mês", sub: `Até ${lastDay} · ${fc.daysLeft === 0 ? "último dia" : `faltam ${fc.daysLeft} dia${fc.daysLeft === 1 ? "" : "s"}`}`, icon: "chart" }, [
+      el("div", { class: "fc-label", text: "Saldo previsto nas tuas contas" }),
+      el("div", { class: "fc-value" + (fc.end < 0 ? " neg" : ""), text: eur(fc.end) }),
+      el("div", { class: "fc-rows" }, [
+        line("Saldo hoje", fc.balToday),
+        fc.schedIn ? line("Receitas agendadas", fc.schedIn, "+ ") : null,
+        line("Pagamentos agendados", fc.schedOut, "− "),
+        line(`Dia a dia (~${eur(fc.daily)}/dia)`, fc.estVar, "− "),
+      ]),
+      el("p", { class: "tiny muted", style: "margin:16px 0 0", text: `Despesas do mês: ${eur(fc.spentSoFar)} até hoje → cerca de ${eur(fc.monthExpense)} no fim${avg.months ? ` (a tua média é ${eur(avg.expense)})` : ""}. Baseado no saldo das fontes — acerta-os para ficar exato.` }),
+    ]);
+  }
+
+  function upcomingPanel(list) {
+    const total = list.reduce((a, u) => a + (u.type === "income" ? u.amount : -u.amount), 0);
+    const KIND = { agendado: "agendado", recorrente: "recorrente", "subscrição": "subscrição · estimado" };
+    const row = (u) => el("div", { class: "tx-line", style: u.tx ? "" : "cursor:default", onclick: u.tx ? () => editTx(u.tx) : null }, [
+      el("span", { class: "bubble" + (u.type === "income" ? " in" : ""), html: UI.icon("calendar", 20) }),
+      el("div", { class: "tl-main" }, [el("div", { class: "tl-title", text: u.desc || "(sem descrição)" }), el("div", { class: "tl-sub", text: `${ddmm(u.date)} · ${inDays(u.date)} · ${KIND[u.kind] || u.kind}` })]),
+      el("div", { class: "money" + (u.type === "income" ? " pos" : ""), text: (u.type === "income" ? "+" : "-") + eur(u.amount) }),
+    ]);
+    const shown = list.slice(0, 5);
+    return panel({ title: "Próximos pagamentos", sub: list.length ? `Próximos 30 dias · ${total >= 0 ? "+" : "-"}${eur(Math.abs(total))}` : "Próximos 30 dias",
+      action: list.length > shown.length ? linkBtn(`Ver ${list.length}`, () => sheet("Próximos 30 dias", [el("div", { class: "tx-rows" }, list.map(row))])) : null }, [
+      shown.length ? el("div", { class: "tx-rows" }, shown.map(row)) : el("div", { class: "empty", text: "Nada agendado. Define movimentos recorrentes (renda, ordenado…) para os veres aqui." }),
+    ]);
+  }
+
+  /* ----------------------------- O QUE MUDOU (alertas) ----------------------------- */
+  function buildInsights(fin, mk, fc, subs) {
+    const cur = mk === monthKey();
+    const out = [];
+    const add = (tone, iconName, text, onClick) => out.push({ tone, icon: iconName, text, onClick });
+    const s = D.financeSummary(fin, mk, essentialSet());
+    const avg = D.avgMonthly(fin, mk, 3);
+
+    const alerted = new Set();
+    if (cur && fc && fc.end < 0) add("bad", "wallet", `Ao ritmo atual terminas o mês com ${eur(fc.end)} nas contas.`);
+
+    (cur ? Object.entries(fin.budgets || {}) : []).map(([c, lim]) => ({ c, lim, spent: s.byCat[c] || 0 }))
+      .filter((b) => b.lim && b.spent / b.lim >= 0.85).sort((a, b) => b.spent / b.lim - a.spent / a.lim).slice(0, 2)
+      .forEach((b) => (alerted.add(b.c), add(b.spent > b.lim ? "bad" : "warn", "target", b.spent > b.lim ? `Orçamento de ${b.c} ultrapassado em ${eur(b.spent - b.lim)}.` : `Orçamento de ${b.c}: ${Math.round(b.spent / b.lim * 100)}% usado.`, () => render("budgets"))));
+
+    if (avg.months) {
+      Object.entries(s.byCat).map(([c, v]) => ({ c, v, a: avg.byCat[c] || 0 }))
+        .filter((x) => !alerted.has(x.c) && x.a > 0 && x.v >= x.a * 1.25 && x.v - x.a >= 15).sort((a, b) => (b.v - b.a) - (a.v - a.a)).slice(0, 2)
+        .forEach((x) => add("warn", "up", `${x.c}: ${eur(x.v)}${cur ? " até agora" : ""} — +${Math.round((x.v / x.a - 1) * 100)}% que a tua média (${eur(x.a)}).`,
+          () => showTxSheet(x.c + " · " + prettyMonth(mk), D.txInMonth(fin.transactions, mk).filter((t) => t.type === "expense" && (t.category || "Outros") === x.c))));
+      if (!cur) Object.entries(avg.byCat).map(([c, a]) => ({ c, a, v: s.byCat[c] || 0 }))
+        .filter((x) => x.a >= 30 && x.v <= x.a * 0.7).sort((a, b) => (b.a - b.v) - (a.a - a.v)).slice(0, 1)
+        .forEach((x) => add("good", "down", `${x.c}: gastaste menos ${Math.round((1 - x.v / x.a) * 100)}% do que costumas.`));
+    }
+
+    if (s.income > 0) {
+      const rate = (s.income - s.expense) / s.income;
+      const avgRate = avg.income > 0 ? (avg.income - avg.expense) / avg.income : null;
+      const pct = (r) => Math.round(r * 100) + "%";
+      const tone = rate < 0 ? "bad" : avgRate != null && rate < avgRate - 0.05 ? "warn" : "good";
+      add(tone, "piggy", `Taxa de poupança: ${pct(rate)} do que ganhaste${avgRate != null ? ` (a tua média é ${pct(avgRate)})` : ""}.`);
+    }
+
+    const recent = (fin.transactions || []).filter((t) => t.type === "expense" && !t.recurringId && t.date && t.date > D.addDays(todayISO(), -120)).map((t) => t.amount).sort((a, b) => a - b);
+    const median = recent.length ? recent[Math.floor(recent.length / 2)] : 0;
+    D.txInMonth(fin.transactions, mk).filter((t) => t.type === "expense" && !t.recurringId && t.amount >= 100 && median && t.amount >= median * 4)
+      .sort((a, b) => b.amount - a.amount).slice(0, 1)
+      .forEach((t) => add("info", "sparkles", `Gasto fora do habitual: ${t.desc || "(sem descrição)"} (${eur(t.amount)}).`, () => editTx(t)));
+
+    subs.filter((x) => x.increase).slice(0, 2).forEach((x) => add("warn", "repeat", `${x.name} subiu de ${eur(x.increase.from)} para ${eur(x.increase.to)}.`, () => render("subs")));
+
+    if (cur) {
+      const bal = D.sourceBalances(fin);
+      const stale = bal.list.filter((b) => (fin.sources || []).some((x) => x.name === b.name) && (b.balance || (fin.transactions || []).some((t) => t.account === b.name)))
+        .map((b) => ({ ...b, days: b.reconciledAt ? D.daysBetween(b.reconciledAt, todayISO()) : null }))
+        .filter((b) => b.days == null || b.days > 30).sort((a, b) => (b.days ?? 9999) - (a.days ?? 9999))[0];
+      if (stale) add("info", "bank", stale.days == null ? `Confere o saldo de ${stale.name} com o banco — ainda nunca foi acertado.` : `Confere o saldo de ${stale.name} — último acerto há ${stale.days} dias.`, () => reconcileSource(stale.name));
+
+      const sm = safetyMonths(fin);
+      if (sm.months != null && sm.months < 3) add(sm.months < 1 ? "bad" : "warn", "target", `Tens ${sm.months.toFixed(1).replace(".", ",")} meses de segurança — o recomendado é 3 a 6.`, () => render("goals"));
+      (fin.goals || []).forEach((g) => { const p = goalPlan(g, fin); if (p.overdue) add("warn", "target", `O prazo de "${g.name}" passou — faltam ${eur(p.left)}.`, () => render("goals")); });
+    }
+
+    const order = { bad: 0, warn: 1, info: 2, good: 3 };
+    return out.sort((a, b) => order[a.tone] - order[b.tone]).slice(0, 6);
+  }
+
+  function insightsPanel(items, cur) {
+    const rows = items.length ? items : [{ tone: "good", icon: "sparkles", text: "Tudo dentro do normal este mês." }];
+    return panel({ title: "O que mudou", sub: cur ? "Comparado com a tua média dos últimos 3 meses" : "Este mês, comparado com os 3 anteriores", icon: "sparkles" }, [
+      el("div", { class: "ins-rows" }, rows.map((i) => el("div", { class: "ins-row" + (i.onClick ? " clickable" : ""), onclick: i.onClick || null }, [
+        el("span", { class: "ins-ico " + i.tone, html: UI.icon(i.icon, 18) }),
+        el("span", { class: "ins-text", text: i.text }),
+        i.onClick ? ico("right", 16) : null,
+      ]))),
+    ]);
+  }
+
+  /* ----------------------------- ACERTAR SALDOS ----------------------------- */
+  function reconcileSource(name) {
+    const fin = Store.get(NS);
+    const today = todayISO();
+    const cur = (D.sourceBalances(fin, today).list.find((x) => x.name === name) || { balance: 0 }).balance;
+    const src = (fin.sources || []).find((x) => x.name === name);
+    const fReal = field("Saldo real hoje (€)", { type: "number", inputmode: "decimal", step: "0.01", placeholder: cur.toFixed(2) });
+    const diffLine = el("p", { class: "tiny muted", style: "margin:0;min-height:18px" });
+    fReal.input.addEventListener("input", () => {
+      const v = parseFloat(fReal.input.value);
+      diffLine.textContent = isNaN(v) ? "" : Math.abs(v - cur) < 0.005 ? "Bate certo ✓" : `Diferença de ${v - cur > 0 ? "+" : "-"}${eur(Math.abs(v - cur))} — fica registada como "Acerto de saldo" (não conta como receita nem despesa).`;
+    });
+    const last = src && src.reconciledAt ? `Último acerto: ${ddmm(src.reconciledAt)} (há ${D.daysBetween(src.reconciledAt, today)} dias).` : "Ainda nunca acertaste esta fonte.";
+    const sh = sheet("Acertar saldo · " + name, [
+      el("p", { class: "muted", style: "margin:0", text: "Escreve o saldo que vês agora no banco (ou na carteira). A app regista a diferença para os saldos baterem certo." }),
+      el("div", { class: "item" }, [el("div", { class: "grow" }, [el("div", { class: "t", text: "Saldo na app hoje" }), el("div", { class: "s", text: last })]), el("div", { class: "amt", text: eur(cur) })]),
+      fReal, diffLine,
+      el("div", { class: "row", style: "gap:10px" }, [
+        el("button", { class: "btn btn-ghost btn-block", text: "Editar fonte", onclick: () => { sh.close(); editSource(src || null, { presetName: name }); } }),
+        el("button", { class: "btn btn-primary btn-block", text: "Acertar", onclick: guardClick(() => {
+          const v = parseFloat(fReal.input.value); if (isNaN(v)) return toast("Escreve o saldo real.");
+          const diff = Math.round((v - cur) * 100) / 100;
+          const adj = diff ? { id: uid(), _c: Date.now(), date: today, desc: "Acerto de saldo", type: "adjust", amount: diff, account: name, category: "Acerto de saldo", manual: true } : null;
+          Store.update(NS, (s) => {
+            s.sources = s.sources || [];
+            let so = s.sources.find((x) => x.name === name);
+            if (!so) { so = { id: uid(), name, opening: 0 }; s.sources.push(so); }
+            so.reconciledAt = today;
+            if (adj) s.transactions.push(adj);
+          });
+          sh.close();
+          if (adj) undo(`${name} acertado (${diff > 0 ? "+" : "-"}${eur(Math.abs(diff))})`, () => Store.update(NS, (s) => { s.transactions = s.transactions.filter((x) => x.id !== adj.id); }));
+          else toast("Bate certo ✓");
+        }) }),
+      ]),
+    ]);
+    setTimeout(() => fReal.input.focus(), 50);
+  }
+
+  function editAdjust(t) {
+    const fAmount = field("Valor do acerto (€, com sinal)", { type: "number", value: t.amount, inputmode: "decimal", step: "0.01" });
+    const fDate = field("Data", { type: "date", value: t.date });
+    const sh = sheet("Acerto de saldo · " + (t.account || ""), [
+      el("p", { class: "tiny muted", style: "margin:0", text: "Corrige o saldo da fonte sem contar como receita nem despesa. Positivo aumenta o saldo, negativo diminui." }),
+      el("div", { class: "input-row" }, [fAmount, fDate]),
+      el("div", { class: "row", style: "gap:10px" }, [
+        el("button", { class: "btn btn-danger btn-block", text: "Apagar", onclick: () => { const snap = JSON.parse(JSON.stringify(t)); Store.update(NS, (s) => { s.transactions = s.transactions.filter((x) => x.id !== t.id); }); sh.close(); undo("Acerto apagado", () => Store.update(NS, (s) => { s.transactions.push(snap); })); } }),
+        el("button", { class: "btn btn-primary btn-block", text: "Guardar", onclick: () => {
+          const v = parseFloat(fAmount.input.value); if (isNaN(v) || !v) return toast("Indica um valor diferente de 0.");
+          Store.update(NS, (s) => { const x = s.transactions.find((y) => y.id === t.id); if (x) { x.amount = Math.round(v * 100) / 100; x.date = fDate.input.value || x.date; } });
+          sh.close(); toast("Guardado ✓");
+        } }),
+      ]),
+    ]);
+  }
+
+  /* ----------------------------- OBJETIVOS ----------------------------- */
+  function goalSaved(g, fin) {
+    if (g.assetId) { const a = (fin.assets || []).find((x) => x.id === g.assetId); return a ? a.value : 0; }
+    return g.saved || 0;
+  }
+  function monthsUntil(mk) { const [y1, m1] = monthKey().split("-").map(Number); const [y2, m2] = mk.split("-").map(Number); return (y2 - y1) * 12 + (m2 - m1); }
+  function goalPlan(g, fin) {
+    const saved = goalSaved(g, fin);
+    const left = Math.max(0, (g.target || 0) - saved);
+    const pct = g.target ? Math.min(100, saved / g.target * 100) : 0;
+    let perMonth = null, overdue = false;
+    if (g.deadline && left > 0) { const n = monthsUntil(g.deadline); if (n < 0) overdue = true; else perMonth = left / Math.max(1, n); }
+    return { saved, left, pct, perMonth, overdue, done: g.target > 0 && left <= 0 };
+  }
+  /** Meses que aguentavas só com o fundo de emergência (ou, sem ele, com o saldo das contas). */
+  function safetyMonths(fin) {
+    const avg = D.avgMonthly(fin, monthKey(), 3);
+    const monthlyExp = avg.months ? avg.expense : D.financeSummary(fin, monthKey()).expense;
+    const em = (fin.goals || []).find((g) => g.emergency);
+    const amount = em ? goalSaved(em, fin) : Math.max(0, D.sourceBalances(fin).total);
+    return { months: monthlyExp > 0 ? amount / monthlyExp : null, amount, monthlyExp, fromGoal: !!em };
+  }
+
+  function renderGoals(view) {
+    const fin = Store.get(NS);
+    const goals = fin.goals || [];
+    const sm = safetyMonths(fin);
+    view.appendChild(pageHead({ eyebrow: "Para onde vais", icon: "target", title: "Objetivos", sub: "Poupa com um destino: fundo de emergência, férias, carro…",
+      actions: [btnI("btn-primary btn-lg", "plus", "Novo objetivo", () => editGoal(null))] }));
+
+    const plans = goals.map((g) => ({ g, p: goalPlan(g, fin) }));
+    const savedTotal = plans.reduce((a, x) => a + x.p.saved, 0);
+    const perMonthTotal = plans.reduce((a, x) => a + (x.p.perMonth || 0), 0);
+    const mTxt = sm.months == null ? "" : sm.months.toFixed(1).replace(".", ",");
+    const monthsTxt = sm.months == null ? "—" : mTxt === "1,0" ? "1 mês" : mTxt + " meses";
+    const kpis = el("div", { class: "kpis" }, [
+      kpi({ label: "Meses de segurança", value: monthsTxt, icon: "target", variant: sm.months != null && sm.months < 3 ? "bad" : "accent",
+        sub: sm.monthlyExp ? `${sm.fromGoal ? "fundo de emergência" : "saldo das contas"} ÷ gasto médio (${eur(sm.monthlyExp)}/mês)` : "Ainda sem despesas para comparar" }),
+      kpi({ label: "Guardado em objetivos", value: eur(savedTotal), sub: `${goals.length} objetivo${goals.length === 1 ? "" : "s"}`, icon: "piggy" }),
+      kpi({ label: "Pôr de parte por mês", value: eur(perMonthTotal), sub: "para cumprir os prazos", icon: "calendar" }),
+    ]);
+
+    let emPanel = null;
+    if (!goals.some((g) => g.emergency)) {
+      const base = sm.monthlyExp || 0;
+      const target = base ? Math.ceil(base * 6 / 100) * 100 : 3000;
+      emPanel = panel({ title: "Fundo de emergência", sub: "A primeira coisa a ter: dinheiro para imprevistos" }, [
+        el("p", { class: "muted", style: "margin:0 0 18px", text: base ? `Recomenda-se 3 a 6 meses de despesas. Com o teu gasto médio (${eur(base)}/mês), isso são ${eur(base * 3)} a ${eur(base * 6)}.` : "Recomenda-se ter guardado o equivalente a 3 a 6 meses de despesas." }),
+        btnI("btn-soft", "plus", "Criar fundo de emergência", () => editGoal({ name: "Fundo de emergência", target, emergency: true }, true)),
+      ]);
+    }
+
+    const rows = el("div", { class: "src-rows" });
+    if (!plans.length) rows.appendChild(el("div", { class: "empty", text: "Ainda não tens objetivos. Cria o primeiro com o botão acima." }));
+    plans.forEach(({ g, p }) => {
+      const linked = g.assetId ? (fin.assets || []).find((a) => a.id === g.assetId) : null;
+      const meta = p.done ? "Objetivo atingido 🎉"
+        : p.overdue ? `O prazo passou — faltam ${eur(p.left)}`
+        : g.deadline ? `Faltam ${eur(p.left)} · ${eur(p.perMonth)}/mês até ${prettyMonth(g.deadline)}`
+        : `Faltam ${eur(p.left)}`;
+      rows.appendChild(el("div", { class: "goal-row" }, [
+        el("div", { class: "src-top", style: "cursor:pointer", onclick: () => editGoal(g) }, [
+          el("span", {}, [g.name, g.emergency ? el("span", { class: "pill on", style: "margin-left:10px", text: "emergência" }) : null]),
+          el("span", { class: "money", text: `${eur(p.saved)} / ${eur(g.target || 0)}` }),
+        ]),
+        bar(p.pct, p.done ? "good" : p.overdue ? "bad" : ""),
+        el("div", { class: "goal-foot" }, [
+          el("span", { class: "tiny " + (p.overdue ? "" : "muted"), style: p.overdue ? "color:var(--bad)" : "", text: meta + (linked ? ` · ligado a «${linked.name}»` : "") }),
+          el("span", { class: "row", style: "gap:6px" }, [
+            linked ? null : el("button", { class: "btn btn-soft btn-sm", text: "+ Guardar", onclick: () => contributeGoal(g) }),
+            el("button", { class: "btn btn-ghost btn-sm", text: "Editar", onclick: () => editGoal(g) }),
+          ]),
+        ]),
+      ]));
+    });
+
+    view.appendChild(el("div", { class: "stack" }, [kpis, emPanel, panel({ title: "Os teus objetivos", sub: "Toca num objetivo para o editar" }, [rows])].filter(Boolean)));
+  }
+
+  function editGoal(g, asNew) {
+    const isNew = !g || asNew;
+    const fin = Store.get(NS);
+    g = { id: uid(), name: "", target: "", saved: 0, deadline: "", emergency: false, assetId: "", ...(g || {}) };
+    const fName = field("Nome", { value: g.name, placeholder: "ex: Férias, Carro, Fundo de emergência" });
+    const fTarget = field("Valor objetivo (€)", { type: "number", value: g.target, inputmode: "decimal", step: "0.01" });
+    const fDeadline = field("Até quando (opcional)", { type: "month", value: g.deadline || "" });
+    const fSource = field("Valor já guardado", { type: "select", value: g.assetId || "", options: [{ value: "", label: "Escrevo eu (manual)" }, ...(fin.assets || []).filter((a) => a.type !== "liability").map((a) => ({ value: a.id, label: "Ligado ao ativo «" + a.name + "»" }))] });
+    const fSaved = field("Já guardado (€)", { type: "number", value: g.saved || "", inputmode: "decimal", step: "0.01" });
+    const emLabel = el("label", { class: "check" }, [el("input", { type: "checkbox", checked: !!g.emergency }), el("span", { text: "É o meu fundo de emergência" })]);
+    const syncSaved = () => { fSaved.style.display = fSource.input.value ? "none" : ""; };
+    fSource.input.addEventListener("change", syncSaved); syncSaved();
+    const sh = sheet(isNew ? "Novo objetivo" : "Editar objetivo", [
+      fName, el("div", { class: "input-row" }, [fTarget, fDeadline]), fSource, fSaved, emLabel,
+      el("p", { class: "tiny muted", style: "margin:0", text: "Ligar a um ativo do Património (ex: conta poupança) faz o progresso acompanhar o valor desse ativo." }),
+      el("div", { class: "row", style: "gap:10px;margin-top:4px" }, [
+        isNew ? null : el("button", { class: "btn btn-danger btn-block", text: "Apagar", onclick: async () => {
+          if (!(await UI.confirm(`Apagar o objetivo "${g.name}"?`, { ok: "Apagar", danger: true }))) return;
+          Store.update(NS, (s) => { s.goals = (s.goals || []).filter((x) => x.id !== g.id); }); sh.close();
+        } }),
+        el("button", { class: "btn btn-primary btn-block", text: "Guardar", onclick: guardClick(() => {
+          const name = fName.input.value.trim(); const target = parseFloat(fTarget.input.value) || 0;
+          if (!name) return toast("Dá um nome ao objetivo."); if (target <= 0) return toast("Indica o valor objetivo.");
+          const data = { ...g, name, target, deadline: fDeadline.input.value || "", assetId: fSource.input.value || "", saved: fSource.input.value ? (g.saved || 0) : Math.max(0, parseFloat(fSaved.input.value) || 0), emergency: emLabel.querySelector("input").checked };
+          Store.update(NS, (s) => {
+            s.goals = s.goals || [];
+            if (data.emergency) s.goals.forEach((x) => { if (x.id !== data.id) x.emergency = false; });
+            const i = s.goals.findIndex((x) => x.id === data.id); if (i >= 0) s.goals[i] = data; else s.goals.push(data);
+          });
+          sh.close(); toast("Guardado ✓");
+        }) }),
+      ]),
+    ]);
+  }
+
+  function contributeGoal(g) {
+    const fAmount = field("Valor (€)", { type: "number", inputmode: "decimal", step: "0.01" });
+    const apply = (sign) => {
+      const v = parseFloat(fAmount.input.value); if (!v || v < 0) return toast("Indica um valor.");
+      Store.update(NS, (s) => { const x = (s.goals || []).find((y) => y.id === g.id); if (x) x.saved = Math.max(0, Math.round(((x.saved || 0) + sign * v) * 100) / 100); });
+      sh.close(); toast(sign > 0 ? `+${eur(v)} em ${g.name} ✓` : `-${eur(v)} de ${g.name}`);
+    };
+    const sh = sheet(g.name, [
+      el("p", { class: "tiny muted", style: "margin:0", text: `Guardado: ${eur(g.saved || 0)} de ${eur(g.target || 0)}.` }),
+      fAmount,
+      el("div", { class: "row", style: "gap:10px" }, [
+        el("button", { class: "btn btn-block", text: "Retirar", onclick: () => apply(-1) }),
+        el("button", { class: "btn btn-primary btn-block", text: "Guardar", onclick: () => apply(1) }),
+      ]),
+    ]);
+    setTimeout(() => fAmount.input.focus(), 50);
+  }
+
+  /* ----------------------------- SUBSCRIÇÕES ----------------------------- */
+  const SUB_RE = /netflix|spotify|hbo|disney|prime video|amazon prime|apple|icloud|google|youtube|microsoft|office|adobe|chatgpt|openai|claude|dropbox|xbox|playstation|nintendo|deezer|tidal|audible|kindle|canva|notion|duolingo|strava|patreon|twitch|gin[aá]sio|fitness|gym|solinca/i;
+  const isSubscription = (x) => x.category === "Subscrições" || SUB_RE.test(x.name || "");
+
+  function renderSubs(view) {
+    const fin = Store.get(NS);
+    const all = subsOf(fin);
+    const subs = all.filter(isSubscription), fixed = all.filter((x) => !isSubscription(x));
+    const sum = (l) => l.reduce((a, x) => a + x.monthly, 0);
+    const avg = D.avgMonthly(fin, monthKey(), 3);
+    view.appendChild(pageHead({ eyebrow: "Pagamentos que se repetem", icon: "repeat", title: "Subscrições", sub: "Detetadas automaticamente nos teus movimentos, mais os recorrentes que definiste.",
+      actions: [btnI("btn-lg", "repeat", "Recorrentes", manageRecurring)] }));
+    const kpis = el("div", { class: "kpis" }, [
+      kpi({ label: "Subscrições por mês", value: eur(sum(subs)), sub: `${subs.length} ativa${subs.length === 1 ? "" : "s"} · ${eur(sum(subs) * 12)}/ano`, icon: "repeat", variant: "accent" }),
+      kpi({ label: "Pagamentos fixos por mês", value: eur(sum(fixed)), sub: `${fixed.length} (renda, seguros, contas…)`, icon: "calendar" }),
+      kpi({ label: "Total por ano", value: eur(sum(all) * 12), sub: avg.income ? `${Math.round(sum(all) / avg.income * 100)}% dos teus rendimentos` : "subscrições + fixos", icon: "chart", variant: "bad" }),
+    ]);
+    const list = (items, empty) => items.length ? el("div", { class: "tx-rows" }, items.map(subRow)) : el("div", { class: "empty", text: empty });
+    const ignored = Object.keys(fin.subsIgnored || {});
+    view.appendChild(el("div", { class: "stack" }, [kpis,
+      panel({ title: "Subscrições", sub: "Streaming, apps, ginásio…" }, [list(subs, "Nenhuma subscrição detetada. É preciso pelo menos 3 meses de movimentos (importa extratos antigos).")]),
+      panel({ title: "Outros pagamentos fixos", sub: "Repetem-se todos os meses com valor parecido" }, [list(fixed, "Nada detetado.")]),
+      ignored.length ? panel({ title: "Ignorados", sub: "Marcados como não sendo subscrições" }, [el("div", { class: "list" }, ignored.map((k) => el("div", { class: "item" }, [
+        el("div", { class: "grow" }, [el("div", { class: "t", text: k.startsWith("rec:") ? ((fin.recurring || []).find((r) => "rec:" + r.id === k) || {}).desc || k : k })]),
+        el("button", { class: "btn btn-ghost btn-sm", text: "Repor", onclick: () => Store.update(NS, (s) => { delete s.subsIgnored[k]; }) }),
+      ])))]) : null,
+    ].filter(Boolean)));
+  }
+
+  function subRow(x) {
+    const meta = [x.category, x.kind === "recurring" ? "recorrente definido por ti" : `${x.count} pagamentos`, "próximo " + ddmm(x.nextDate)].join(" · ");
+    return el("div", { class: "tx-line", onclick: () => subSheet(x) }, [
+      el("span", { class: "bubble", html: UI.icon("repeat", 20) }),
+      el("div", { class: "tl-main" }, [el("div", { class: "tl-title", text: x.name }), el("div", { class: "tl-sub", text: meta })]),
+      el("div", { style: "text-align:right" }, [
+        el("div", { class: "money", text: "-" + eur(x.monthly) }),
+        x.increase ? el("div", { class: "tiny", style: "color:var(--warn);font-weight:700", text: `▲ +${eur(x.increase.to - x.increase.from)}` }) : el("div", { class: "tiny muted", text: "/mês" }),
+      ]),
+    ]);
+  }
+
+  function subSheet(x) {
+    const hist = [...x.history].reverse();
+    const sh = sheet(x.name, [
+      el("p", { class: "muted", style: "margin:0", text: `${eur(x.monthly)}/mês · ${eur(x.monthly * 12)}/ano · próximo pagamento ${ddmm(x.nextDate)} (${inDays(x.nextDate)})` }),
+      x.increase ? el("p", { class: "tiny", style: "margin:0;color:var(--warn)", text: `Subiu de ${eur(x.increase.from)} para ${eur(x.increase.to)} em ${ddmm(x.increase.date)}.` }) : null,
+      el("div", { class: "section-title", text: "Histórico" }),
+      hist.length ? el("div", { class: "list" }, hist.slice(0, 24).map((h) => el("div", { class: "item" }, [el("div", { class: "grow" }, [el("div", { class: "t", text: ddmm(h.date) })]), el("div", { class: "amt", text: "-" + eur(h.amount) })]))) : el("div", { class: "empty", text: "Ainda sem pagamentos." }),
+      el("div", { class: "row", style: "gap:10px;margin-top:6px" }, [
+        x.kind === "recurring"
+          ? el("button", { class: "btn btn-block", text: "Editar recorrente", onclick: () => { sh.close(); const r = (Store.get(NS).recurring || []).find((y) => y.id === x.recurringId); if (r) editRecurring(r); } })
+          : null,
+        el("button", { class: "btn btn-ghost btn-block", text: "Não é subscrição", onclick: () => { Store.update(NS, (s) => { s.subsIgnored = s.subsIgnored || {}; s.subsIgnored[x.key] = Date.now(); }); sh.close(); toast("Escondido — podes repor em Ignorados"); } }),
+      ]),
     ]);
   }
 
@@ -525,9 +898,9 @@
     }
 
     function tableRow(t) {
-      const inc = t.type === "income", tr = t.type === "transfer";
+      const inc = isPos(t), tr = t.type === "transfer";
       const on = selected.has(t.id);
-      const cat = tr ? "Transferência" : (t.category || "Outros");
+      const cat = tr ? "Transferência" : t.type === "adjust" ? "Acerto de saldo" : (t.category || "Outros");
       const src = tr ? `${t.account || "?"} → ${t.toAccount || "?"}` : (t.account || "—");
       return el("div", { class: "t-row" + (on ? " on" : ""), id: "tx-" + t.id, onclick: () => (selected.size ? toggle(t.id) : editTx(t)) }, [
         el("input", { type: "checkbox", checked: on, "aria-label": "Selecionar " + (t.desc || "movimento"), onclick: (e) => { e.stopPropagation(); toggle(t.id); } }),
@@ -581,7 +954,7 @@
     fName.addEventListener("keydown", (e) => { if (e.key === "Enter") addBtn.click(); });
 
     const counts = {};
-    fin.transactions.forEach((t) => { if (t.type === "transfer") return; const c = t.category || "Outros"; counts[c] = (counts[c] || 0) + 1; });
+    fin.transactions.forEach((t) => { if (t.type === "transfer" || t.type === "adjust") return; const c = t.category || "Outros"; counts[c] = (counts[c] || 0) + 1; });
     const registered = new Set((fin.categories || []).map((c) => c.name));
     const implicit = Object.keys(counts).filter((n) => !registered.has(n)).map((name) => ({ name, group: catGroup(name) }));
     const order = { essential: 0, lifestyle: 1, income: 2 };
@@ -721,6 +1094,7 @@
   }
 
   function editTx(t) {
+    if (t && t.type === "adjust") return editAdjust(t);
     const fin = Store.get(NS);
     const isNew = !t;
     t = t || { id: uid(), date: todayISO(), desc: "", amount: "", category: "Outros", type: "expense", account: sourceNames()[0] || "Dinheiro", manual: true };
@@ -1245,7 +1619,7 @@
   function savingsData(fin) {
     const months = {};
     (fin.transactions || []).forEach((t) => {
-      if (t.type === "transfer") return;
+      if (t.type === "transfer" || t.type === "adjust") return;
       const mk = (t.date || "").slice(0, 7); if (!/^\d{4}-\d{2}$/.test(mk)) return;
       months[mk] = months[mk] || { income: 0, expense: 0 };
       if (t.type === "income") months[mk].income += t.amount; else months[mk].expense += t.amount;

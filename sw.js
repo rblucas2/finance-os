@@ -1,6 +1,6 @@
 /* Service worker — app shell offline das Finanças */
 const PREFIX = "financeos-";
-const VERSION = PREFIX + "v2";
+const VERSION = PREFIX + "v3";
 const CORE = [
   "./", "./index.html", "./finance.js", "./manifest.webmanifest",
   "./shared/base.css", "./shared/ui.js", "./shared/store.js", "./shared/sync.js", "./shared/domain.js", "./shared/app.js",
